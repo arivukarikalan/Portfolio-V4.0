@@ -105,6 +105,7 @@ export function renderShell(options: {
     })
     .join('');
 
+  const logoUrl = new URL('favicon.svg', window.location.href).toString();
   return `
     <div class="app-shell bg-light">
       <nav class="navbar app-topbar navbar-light bg-white border-bottom sticky-top">
@@ -113,7 +114,7 @@ export function renderShell(options: {
             <button class="btn nav-icon-btn nav-hamburger d-lg-none" id="sidebar-toggle" type="button" aria-label="Toggle navigation">
               ${lucideIcon('menu')}
             </button>
-            <img src="${import.meta.env.BASE_URL}favicon.svg" alt="${APP_NAME}" width="36" height="36" class="rounded-3 border" />
+            <img src="${logoUrl}" alt="${APP_NAME}" width="36" height="36" class="rounded-3 border" />
             <div>
               <div class="fw-semibold">${APP_NAME}</div>
             </div>
