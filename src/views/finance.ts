@@ -138,8 +138,13 @@ const projectedMonthsToTarget = (
   annualReturnPct: number
 ): number | null => {
   if (current >= target) return 0;
-  if (monthlyContribution <= 0) return null;
   const r = annualReturnPct > 0 ? annualReturnPct / 100 / 12 : 0;
+  if (monthlyContribution <= 0) {
+    if (r <= 0 || current <= 0) return null;
+    const ratio = target / current;
+    if (ratio <= 1) return 0;
+    return Math.ceil(Math.log(ratio) / Math.log(1 + r));
+  }
   if (r === 0) {
     return Math.ceil((target - current) / monthlyContribution);
   }
