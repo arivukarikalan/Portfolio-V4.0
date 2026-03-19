@@ -310,7 +310,6 @@ export async function initCloudSync(session: UserSession): Promise<void> {
   const state = await getSyncState();
   const now = Date.now();
   const syncIntervalMs = Math.max(1, config.cloudSyncIntervalMin) * 60 * 1000;
-  const lastSync = state.lastSyncedAt ? new Date(state.lastSyncedAt).getTime() : 0;
   const lastPull = state.lastPullAt ? new Date(state.lastPullAt).getTime() : 0;
   const hasPending = Boolean(state.pendingPayload);
   const shouldPull = navigator.onLine && !hasPending && (!lastPull || now - lastPull > syncIntervalMs);

@@ -9,7 +9,7 @@ import { getUserSettings } from '../storage/settings';
 import { initCloudSync, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import type { TradeRecord, UserSettings } from '../core/types';
-import { formatDate, formatDateTime, formatMoney, formatPct } from '../utils/format';
+import { formatDate, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
 import { computeCurrentCycleState, computeCurrentCycleLots } from '../utils/tradeCycles';
 import { toErrorMessage } from '../utils/errors';

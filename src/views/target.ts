@@ -906,7 +906,6 @@ export function renderTargetView(root: HTMLElement): void {
 
     const bindPagination = (
       paginationEl: HTMLElement,
-      getPage: () => number,
       setPage: (value: number) => void,
       renderFn: () => void
     ) => {
@@ -921,16 +920,16 @@ export function renderTargetView(root: HTMLElement): void {
       });
     };
 
-    bindPagination(readyPagination, () => readyPage, (value) => (readyPage = value), () =>
+    bindPagination(readyPagination, (value) => (readyPage = value), () =>
       renderReadyList(currentReady)
     );
-    bindPagination(completedPagination, () => completedPage, (value) => (completedPage = value), () =>
+    bindPagination(completedPagination, (value) => (completedPage = value), () =>
       renderList(completedList, completedPagination, currentCompleted, 'No completed exits yet.', completedPage)
     );
-    bindPagination(earlyPagination, () => earlyPage, (value) => (earlyPage = value), () =>
+    bindPagination(earlyPagination, (value) => (earlyPage = value), () =>
       renderList(earlyList, earlyPagination, currentEarly, 'No early exits yet.', earlyPage)
     );
-    bindPagination(lossPagination, () => lossPage, (value) => (lossPage = value), () =>
+    bindPagination(lossPagination, (value) => (lossPage = value), () =>
       renderList(lossList, lossPagination, currentLoss, 'No losses booked yet.', lossPage)
     );
 

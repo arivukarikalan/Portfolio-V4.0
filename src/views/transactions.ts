@@ -944,7 +944,7 @@ export function renderTransactionsView(root: HTMLElement): void {
           changed = true;
           continue;
         }
-        let nextRun = template.nextRun;
+        let nextRun: string | null = template.nextRun;
         let guard = 0;
         while (nextRun <= today && guard < 24) {
           if (template.recurrenceEnd && nextRun > template.recurrenceEnd) {

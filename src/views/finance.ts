@@ -911,7 +911,6 @@ export function renderFinanceView(root: HTMLElement): void {
       );
       const netDebt = totals.borrowed - totals.repay;
       const netLent = totals.lent - totals.receive;
-      const savings = totals.income - totals.expense;
       const netWorth = computeNetworthSeries(buckets, holdingsValue).slice(-1)[0] || 0;
       const currentMonth = buckets[buckets.length - 1];
       const monthlyCashflow = currentMonth ? currentMonth.income - currentMonth.expense : 0;
@@ -932,9 +931,13 @@ export function renderFinanceView(root: HTMLElement): void {
         listGoals(session.userId),
         getUserSettings(session.userId)
       ]);
-      const priceMap = new Map(
-        prices.map((row) => [normalizeSymbol(row.ticker), Number(row.price) || 0]).filter(([key]) => key)
-      );
+      const priceEntries = prices
+        .map((row) => {
+          const symbol = normalizeSymbol(row.ticker);
+          return symbol ? [symbol, Number(row.price) || 0] : null;
+        })
+        .filter((entry): entry is [string, number] => Boolean(entry));
+      const priceMap = new Map<string, number>(priceEntries);
       const holdings = buildHoldings(trades, priceMap);
       const holdingsValue = holdings.reduce((sum, row) => sum + row.currentValue, 0);
 
