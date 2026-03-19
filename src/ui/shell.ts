@@ -113,7 +113,7 @@ export function renderShell(options: {
             <button class="btn nav-icon-btn nav-hamburger d-lg-none" id="sidebar-toggle" type="button" aria-label="Toggle navigation">
               ${lucideIcon('menu')}
             </button>
-            <img src="/favicon.svg" alt="${APP_NAME}" width="36" height="36" class="rounded-3 border" />
+            <img src="${import.meta.env.BASE_URL}favicon.svg" alt="${APP_NAME}" width="36" height="36" class="rounded-3 border" />
             <div>
               <div class="fw-semibold">${APP_NAME}</div>
             </div>
