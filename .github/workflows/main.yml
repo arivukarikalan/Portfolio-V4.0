@@ -17,6 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: github-pages
     env:
       VITE_APPS_SCRIPT_URL: ${{ secrets.VITE_APPS_SCRIPT_URL }}
     steps:
@@ -25,6 +26,12 @@ jobs:
         with:
           node-version: 20
           cache: "npm"
+      - name: Verify Apps Script URL
+        run: |
+          if [ -z "$VITE_APPS_SCRIPT_URL" ]; then
+            echo "VITE_APPS_SCRIPT_URL is missing. Add it as a repo secret or environment secret."
+            exit 1
+          fi
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
