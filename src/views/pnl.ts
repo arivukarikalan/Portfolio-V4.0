@@ -506,7 +506,7 @@ export function renderPnlView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#pnl-feedback');
@@ -1039,3 +1039,4 @@ export function renderPnlView(root: HTMLElement): void {
     await refreshData();
   })();
 }
+

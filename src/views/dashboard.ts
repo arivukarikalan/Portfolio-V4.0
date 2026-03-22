@@ -48,6 +48,8 @@ const rangeOptions = [
   { id: 'all', label: 'All', days: null }
 ];
 
+const isDarkTheme = () => document.documentElement.getAttribute('data-theme') === 'dark';
+
 
 function groupByDate(trades: TradeRecord[]): Map<string, TradeRecord[]> {
   const map = new Map<string, TradeRecord[]>();
@@ -346,7 +348,7 @@ export function renderDashboardView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#dashboard-feedback');
@@ -471,6 +473,9 @@ export function renderDashboardView(root: HTMLElement): void {
     const renderTrend = () => {
       if (!trendCanvas) return;
       if (trendChart) trendChart.destroy();
+      const dark = isDarkTheme();
+      const axisTick = dark ? '#94a3b8' : '#64748b';
+      const gridColor = dark ? 'rgba(148, 163, 184, 0.2)' : 'rgba(148, 163, 184, 0.2)';
       const range = rangeOptions.find((option) => option.id === rangeId);
       let points = trendData;
       if (range?.days) {
@@ -522,7 +527,7 @@ export function renderDashboardView(root: HTMLElement): void {
           ctx.fillStyle = '#6366f1';
           ctx.fill();
           ctx.lineWidth = 3;
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = dark ? '#0b1220' : '#ffffff';
           ctx.stroke();
           ctx.restore();
         }
@@ -575,16 +580,16 @@ export function renderDashboardView(root: HTMLElement): void {
             x: {
               grid: { display: false },
               ticks: {
-                color: '#94a3b8',
+                color: axisTick,
                 maxTicksLimit: 6,
                 callback: (value, index) => tickFormatter(value, index)
               }
             },
             y: {
               grid: {
-                color: 'rgba(148, 163, 184, 0.2)'
+                color: gridColor
               },
-              ticks: { color: '#94a3b8', callback: (val) => formatCompactMoney(Number(val)) }
+              ticks: { color: axisTick, callback: (val) => formatCompactMoney(Number(val)) }
             }
           }
         },
@@ -596,6 +601,8 @@ export function renderDashboardView(root: HTMLElement): void {
     const renderAllocation = () => {
       if (!allocationCanvas) return;
       if (allocationChart) allocationChart.destroy();
+      const dark = isDarkTheme();
+      const legendText = dark ? '#e2e8f0' : '#334155';
       const top = holdings.slice(0, 5);
       const othersValue = holdings.slice(5).reduce((sum, row) => sum + row.currentValue, 0);
       const labels = [...top.map((row) => row.symbol)];
@@ -622,10 +629,10 @@ export function renderDashboardView(root: HTMLElement): void {
           ctx.save();
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = '#0f172a';
+          ctx.fillStyle = dark ? '#e2e8f0' : '#0f172a';
           ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
           ctx.fillText(formatCompactMoney(totalValue), x, y - 6);
-          ctx.fillStyle = '#94a3b8';
+          ctx.fillStyle = dark ? '#94a3b8' : '#94a3b8';
           ctx.font = '500 11px system-ui, -apple-system, "Segoe UI", sans-serif';
           ctx.fillText('Total', x, y + 14);
           ctx.restore();
@@ -640,7 +647,7 @@ export function renderDashboardView(root: HTMLElement): void {
               data,
               backgroundColor: chartPalette,
               borderWidth: 6,
-              borderColor: '#f8fafc',
+              borderColor: dark ? '#0b1220' : '#f8fafc',
               borderRadius: 12,
               spacing: 4
             }
@@ -657,6 +664,7 @@ export function renderDashboardView(root: HTMLElement): void {
             legend: {
               position: 'bottom',
               labels: {
+                color: legendText,
                 boxWidth: 10,
                 padding: 12,
                 generateLabels(chart: ChartJS) {
@@ -672,7 +680,7 @@ export function renderDashboardView(root: HTMLElement): void {
                       fillStyle: Array.isArray(dataset.backgroundColor)
                         ? dataset.backgroundColor[index]
                         : dataset.backgroundColor,
-                      strokeStyle: '#ffffff',
+                      strokeStyle: dark ? '#0b1220' : '#ffffff',
                       lineWidth: 0,
                       hidden: false,
                       index
@@ -714,6 +722,7 @@ export function renderDashboardView(root: HTMLElement): void {
     const renderExposure = () => {
       if (!exposureCanvas) return;
       if (exposureChart) exposureChart.destroy();
+      const dark = isDarkTheme();
       const top = holdings.slice(0, 6);
       if (!top.length) {
         exposureCanvas.classList.add('d-none');
@@ -743,8 +752,14 @@ export function renderDashboardView(root: HTMLElement): void {
           plugins: { legend: { display: false } },
           indexAxis: 'y',
           scales: {
-            x: { grid: { color: '#eef2f6' }, ticks: { callback: (val) => formatMoney(Number(val)) } },
-            y: { grid: { display: false } }
+            x: {
+              grid: { color: dark ? 'rgba(148, 163, 184, 0.2)' : '#eef2f6' },
+              ticks: {
+                color: dark ? '#94a3b8' : '#64748b',
+                callback: (val) => formatMoney(Number(val))
+              }
+            },
+            y: { grid: { display: false }, ticks: { color: dark ? '#94a3b8' : '#64748b' } }
           }
         }
       };
@@ -850,3 +865,4 @@ export function renderDashboardView(root: HTMLElement): void {
     await refreshDashboard();
   })();
 }
+

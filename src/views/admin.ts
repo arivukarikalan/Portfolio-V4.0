@@ -512,7 +512,7 @@ export function renderAdminView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#admin-feedback');
@@ -913,3 +913,4 @@ export function renderAdminView(root: HTMLElement): void {
     await refreshAdminData();
   })();
 }
+

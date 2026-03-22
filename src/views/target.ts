@@ -302,7 +302,7 @@ export function renderTargetView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#target-feedback');
@@ -1019,3 +1019,4 @@ export function renderTargetView(root: HTMLElement): void {
     await refresh();
   })();
 }
+

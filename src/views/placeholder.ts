@@ -26,7 +26,8 @@ export function renderPlaceholderView(root: HTMLElement, options: { title: strin
         </div>
       `
     });
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
   })();
 }
+

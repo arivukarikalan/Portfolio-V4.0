@@ -2,6 +2,7 @@ import { APP_NAME } from '../core/constants';
 import { clearSession } from '../storage/db';
 import type { UserSession } from '../core/types';
 import { initLucide, lucideIcon } from './icons';
+import { applyUiSettings, loadUiSettings, saveUiSettings, type UiFontSize, type UiTheme } from './preferences';
 
 type NavItem = {
   id: string;
@@ -145,6 +146,34 @@ export function renderShell(options: {
                   <div class="small text-muted text-uppercase">${session.role}</div>
                 </div>
                 <div class="dropdown-divider"></div>
+                <div class="px-3 py-2">
+                  <div class="small text-muted text-uppercase mb-2">Preferences</div>
+                  <div class="profile-pref">
+                    <label class="form-label small mb-1" for="profile-theme">Theme</label>
+                    <select class="form-select form-select-sm" id="profile-theme" aria-label="Theme">
+                      <option value="system">System</option>
+                      <option value="light">Light</option>
+                      <option value="dark">Dark</option>
+                    </select>
+                  </div>
+                  <div class="profile-pref">
+                    <label class="form-label small mb-1" for="profile-font-size">Font Size</label>
+                    <select class="form-select form-select-sm" id="profile-font-size" aria-label="Font size">
+                      <option value="sm">Small</option>
+                      <option value="md">Default</option>
+                      <option value="lg">Large</option>
+                    </select>
+                  </div>
+                  <div class="form-check form-switch profile-pref">
+                    <input class="form-check-input" type="checkbox" id="profile-compact" />
+                    <label class="form-check-label" for="profile-compact">Compact Mode</label>
+                  </div>
+                  <div class="form-check form-switch profile-pref">
+                    <input class="form-check-input" type="checkbox" id="profile-animations" />
+                    <label class="form-check-label" for="profile-animations">Animations</label>
+                  </div>
+                </div>
+                <div class="dropdown-divider"></div>
                 <button class="dropdown-item text-danger" id="profile-logout" type="button">Logout</button>
               </div>
             </div>
@@ -236,7 +265,7 @@ export function renderShell(options: {
   `;
 }
 
-export function bindShell(root: HTMLElement): void {
+export function bindShell(root: HTMLElement, session: UserSession): void {
   initLucide();
   const sidebar = root.querySelector<HTMLElement>('.app-sidebar');
   const sidebarBackdrop = root.querySelector<HTMLElement>('#sidebar-backdrop');
@@ -248,6 +277,10 @@ export function bindShell(root: HTMLElement): void {
   const profileToggle = root.querySelector<HTMLButtonElement>('#profile-toggle');
   const profileMenu = root.querySelector<HTMLDivElement>('#profile-menu');
   const profileLogout = root.querySelector<HTMLButtonElement>('#profile-logout');
+  const profileTheme = root.querySelector<HTMLSelectElement>('#profile-theme');
+  const profileFontSize = root.querySelector<HTMLSelectElement>('#profile-font-size');
+  const profileCompact = root.querySelector<HTMLInputElement>('#profile-compact');
+  const profileAnimations = root.querySelector<HTMLInputElement>('#profile-animations');
   const mobileQuickNav = root.querySelector<HTMLElement>('.mobile-bottom-nav');
 
   const closeSidebar = () => {
@@ -321,6 +354,44 @@ export function bindShell(root: HTMLElement): void {
   profileLogout?.addEventListener('click', async () => {
     await clearSession();
     window.location.href = 'index.html';
+  });
+
+  const syncPreferenceUi = (theme: UiTheme, fontSize: UiFontSize, compactMode: boolean, animations: boolean) => {
+    if (profileTheme) profileTheme.value = theme;
+    if (profileFontSize) profileFontSize.value = fontSize;
+    if (profileCompact) profileCompact.checked = compactMode;
+    if (profileAnimations) profileAnimations.checked = animations;
+  };
+
+  let currentPrefs = loadUiSettings(session.userId);
+  applyUiSettings(currentPrefs);
+  syncPreferenceUi(
+    currentPrefs.theme,
+    currentPrefs.fontSize,
+    currentPrefs.compactMode,
+    currentPrefs.animations
+  );
+
+  const updatePrefs = (next: Partial<typeof currentPrefs>) => {
+    currentPrefs = { ...currentPrefs, ...next };
+    saveUiSettings(session.userId, currentPrefs);
+    applyUiSettings(currentPrefs);
+  };
+
+  profileTheme?.addEventListener('change', () => {
+    updatePrefs({ theme: profileTheme.value as UiTheme });
+  });
+
+  profileFontSize?.addEventListener('change', () => {
+    updatePrefs({ fontSize: profileFontSize.value as UiFontSize });
+  });
+
+  profileCompact?.addEventListener('change', () => {
+    updatePrefs({ compactMode: profileCompact.checked });
+  });
+
+  profileAnimations?.addEventListener('change', () => {
+    updatePrefs({ animations: profileAnimations.checked });
   });
 
   if (mobileQuickNav) {

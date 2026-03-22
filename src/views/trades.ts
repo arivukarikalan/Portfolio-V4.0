@@ -846,7 +846,7 @@ export function renderTradesView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#trade-feedback');
@@ -969,9 +969,6 @@ export function renderTradesView(root: HTMLElement): void {
 
     const queueAndSync = async () => {
       await queueSnapshot(session.userId);
-      if (navigator.onLine) {
-        await syncNow(session);
-      }
     };
 
     const setTab = (name: string) => {
@@ -1902,3 +1899,4 @@ export function renderTradesView(root: HTMLElement): void {
     await refreshData();
   })();
 }
+

@@ -370,7 +370,7 @@ export function renderFinanceView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#finance-feedback');
@@ -989,3 +989,4 @@ export function renderFinanceView(root: HTMLElement): void {
     await refreshFinance();
   })();
 }
+

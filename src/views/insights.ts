@@ -384,7 +384,7 @@ export function renderInsightsView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#insights-feedback');
@@ -882,3 +882,4 @@ export function renderInsightsView(root: HTMLElement): void {
     await refreshData();
   })();
 }
+

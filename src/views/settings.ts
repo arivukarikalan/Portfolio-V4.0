@@ -1,7 +1,7 @@
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert } from '../ui/feedback';
 import { getUserSettings, saveUserSettings } from '../storage/settings';
-import { queueSnapshot, syncNow } from '../services/cloudSync';
+import { queueSnapshot } from '../services/cloudSync';
 import { requireSession } from './guards';
 import { lucideIcon } from '../ui/icons';
 
@@ -145,7 +145,7 @@ export function renderSettingsView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
 
     const feedback = root.querySelector<HTMLDivElement>('#settings-feedback');
     const totalInvestment = root.querySelector<HTMLInputElement>('#settings-total-investment');
@@ -224,9 +224,6 @@ export function renderSettingsView(root: HTMLElement): void {
         };
         await saveUserSettings(settings);
         await queueSnapshot(session.userId);
-        if (navigator.onLine) {
-          await syncNow(session);
-        }
         await loadSettings();
         showAlert(feedback, 'success', 'Settings saved.');
       } catch (error) {
@@ -239,3 +236,4 @@ export function renderSettingsView(root: HTMLElement): void {
     await loadSettings();
   })();
 }
+

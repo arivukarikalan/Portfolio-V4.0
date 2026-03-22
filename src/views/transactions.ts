@@ -601,7 +601,7 @@ export function renderTransactionsView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#transactions-feedback');
@@ -618,6 +618,7 @@ export function renderTransactionsView(root: HTMLElement): void {
     const paidInput = root.querySelector<HTMLInputElement>('#txn-paid');
     const paidLabel = root.querySelector<HTMLLabelElement>('#txn-paid-label');
     const resetButton = root.querySelector<HTMLButtonElement>('#txn-reset');
+    const saveButton = root.querySelector<HTMLButtonElement>('#txn-save');
     const tableBody = root.querySelector<HTMLTableSectionElement>('#txn-table');
     const countLabel = root.querySelector<HTMLDivElement>('#txn-count');
     const kpiRecIn = root.querySelector<HTMLDivElement>('#txn-kpi-rec-in');
@@ -656,6 +657,7 @@ export function renderTransactionsView(root: HTMLElement): void {
     const recIntervalInput = root.querySelector<HTMLInputElement>('#rec-interval');
     const recNextRunLabel = root.querySelector<HTMLDivElement>('#rec-next-run');
     const recResetButton = root.querySelector<HTMLButtonElement>('#rec-reset');
+    const recSaveButton = root.querySelector<HTMLButtonElement>('#rec-save');
     const recTableBody = root.querySelector<HTMLTableSectionElement>('#rec-table');
     const recCount = root.querySelector<HTMLDivElement>('#rec-count');
     const sectionGoals = root.querySelector<HTMLDivElement>('#txn-section-goals');
@@ -666,6 +668,7 @@ export function renderTransactionsView(root: HTMLElement): void {
     const goalStatusSelect = root.querySelector<HTMLSelectElement>('#goal-status');
     const goalNotesInput = root.querySelector<HTMLTextAreaElement>('#goal-notes');
     const goalResetButton = root.querySelector<HTMLButtonElement>('#goal-reset');
+    const goalSaveButton = root.querySelector<HTMLButtonElement>('#goal-save');
     const goalTableBody = root.querySelector<HTMLTableSectionElement>('#goal-table');
     const goalCount = root.querySelector<HTMLDivElement>('#goal-count');
     const goalTotalTarget = root.querySelector<HTMLDivElement>('#goal-total-target');
@@ -689,6 +692,7 @@ export function renderTransactionsView(root: HTMLElement): void {
       !paidInput ||
       !paidLabel ||
       !resetButton ||
+      !saveButton ||
       !tableBody ||
       !countLabel ||
       !kpiRecIn ||
@@ -720,6 +724,7 @@ export function renderTransactionsView(root: HTMLElement): void {
       !goalStatusSelect ||
       !goalNotesInput ||
       !goalResetButton ||
+      !goalSaveButton ||
       !goalTableBody ||
       !goalCount ||
       !goalTotalTarget ||
@@ -741,6 +746,7 @@ export function renderTransactionsView(root: HTMLElement): void {
       !recIntervalInput ||
       !recNextRunLabel ||
       !recResetButton ||
+      !recSaveButton ||
       !recTableBody ||
       !recCount
     ) {
@@ -759,11 +765,32 @@ export function renderTransactionsView(root: HTMLElement): void {
     let paymentTarget: TransactionRecord | null = null;
     let paymentRemaining: number = 0;
     let rangeSelection: string = '30';
+    const rowLocks = new Set<string>();
 
     const queueAndSync = async () => {
       await queueSnapshot(session.userId);
-      if (navigator.onLine) {
-        await syncNow(session);
+    };
+
+    const setButtonLocked = (button: HTMLButtonElement, locked: boolean) => {
+      button.disabled = locked;
+      button.setAttribute('aria-busy', locked ? 'true' : 'false');
+    };
+
+    const toggleRowActions = (id: string, disabled: boolean) => {
+      root.querySelectorAll<HTMLButtonElement>(`[data-id="${id}"]`).forEach((btn) => {
+        btn.disabled = disabled;
+      });
+    };
+
+    const withRowLock = async (id: string, action: () => Promise<void>) => {
+      if (rowLocks.has(id)) return;
+      rowLocks.add(id);
+      toggleRowActions(id, true);
+      try {
+        await action();
+      } finally {
+        rowLocks.delete(id);
+        toggleRowActions(id, false);
       }
     };
 
@@ -1420,82 +1447,83 @@ export function renderTransactionsView(root: HTMLElement): void {
         showAlert(feedback, 'danger', 'Paid amount cannot exceed total debt amount.');
         return;
       }
-      let adjustedAmount = state.amount;
-      if (!editingId && (state.type === 'BORROWED' || state.type === 'LENT')) {
-        const personKey = state.personName.trim().toLowerCase();
-        const oppositeType = state.type === 'BORROWED' ? 'LENT' : 'BORROWED';
-        const offsetRows = transactions
-          .filter(
-            (row) =>
-              row.type === oppositeType &&
-              (row.personName || '').trim().toLowerCase() === personKey &&
-              (row.paidAmount || 0) < row.amount
-          )
-          .sort((a, b) => a.date.localeCompare(b.date));
-        for (const row of offsetRows) {
-          if (adjustedAmount <= 0) break;
-          const remaining = Math.max(0, row.amount - (row.paidAmount || 0));
-          if (remaining <= 0) continue;
-          const offset = Math.min(adjustedAmount, remaining);
-          const paymentType: TransactionType = row.type === 'LENT' ? 'DEBT_RECEIVE' : 'DEBT_REPAY';
-          await addTransaction({
-            userId: session.userId,
-            type: paymentType,
-            amount: offset,
-            category: categoriesByType[paymentType][0],
-            date: state.date,
-            notes: `Auto offset from ${state.type === 'BORROWED' ? 'borrow' : 'lend'} entry`,
-            personName: row.personName || undefined,
-            dueDate: row.dueDate || undefined,
-            status: undefined,
-            paidAmount: undefined,
-            isRecurring: false,
-            recurrence: null,
-            nextRun: null,
-            isTemplate: false,
-            linkedId: row.id
-          });
-          const newPaid = (row.paidAmount || 0) + offset;
-          const newStatus = newPaid >= row.amount ? 'CLOSED' : 'OPEN';
-          await updateTransaction(row.id, session.userId, { paidAmount: newPaid, status: newStatus });
-          adjustedAmount -= offset;
-        }
-        if (adjustedAmount <= 0) {
-          showAlert(feedback, 'success', 'Debt offset by existing balance. No new debt recorded.');
-          await queueAndSync();
-          resetForm();
-          await refresh();
-          return;
-        }
-      }
-
-      const paidAmount = isDebtType(state.type) ? state.paidAmount : undefined;
-      const computedStatus =
-        state.type === 'BORROWED' || state.type === 'LENT'
-          ? (paidAmount || 0) >= adjustedAmount
-            ? 'CLOSED'
-            : 'OPEN'
-          : undefined;
-      const payload: Omit<TransactionRecord, 'id' | 'createdAt' | 'updatedAt'> = {
-        userId: session.userId,
-        type: state.type,
-        amount: adjustedAmount,
-        category: state.category,
-        date: state.date,
-        notes: state.notes || undefined,
-        personName: state.personName || undefined,
-        dueDate: state.dueDate || undefined,
-        status: computedStatus,
-        paidAmount,
-        isRecurring: false,
-        recurrence: null,
-        nextRun: null,
-        recurrenceEnd: null,
-        isTemplate: false,
-        linkedId: undefined
-      };
-
+      setButtonLocked(saveButton, true);
       try {
+        let adjustedAmount = state.amount;
+        if (!editingId && (state.type === 'BORROWED' || state.type === 'LENT')) {
+          const personKey = state.personName.trim().toLowerCase();
+          const oppositeType = state.type === 'BORROWED' ? 'LENT' : 'BORROWED';
+          const offsetRows = transactions
+            .filter(
+              (row) =>
+                row.type === oppositeType &&
+                (row.personName || '').trim().toLowerCase() === personKey &&
+                (row.paidAmount || 0) < row.amount
+            )
+            .sort((a, b) => a.date.localeCompare(b.date));
+          for (const row of offsetRows) {
+            if (adjustedAmount <= 0) break;
+            const remaining = Math.max(0, row.amount - (row.paidAmount || 0));
+            if (remaining <= 0) continue;
+            const offset = Math.min(adjustedAmount, remaining);
+            const paymentType: TransactionType = row.type === 'LENT' ? 'DEBT_RECEIVE' : 'DEBT_REPAY';
+            await addTransaction({
+              userId: session.userId,
+              type: paymentType,
+              amount: offset,
+              category: categoriesByType[paymentType][0],
+              date: state.date,
+              notes: `Auto offset from ${state.type === 'BORROWED' ? 'borrow' : 'lend'} entry`,
+              personName: row.personName || undefined,
+              dueDate: row.dueDate || undefined,
+              status: undefined,
+              paidAmount: undefined,
+              isRecurring: false,
+              recurrence: null,
+              nextRun: null,
+              isTemplate: false,
+              linkedId: row.id
+            });
+            const newPaid = (row.paidAmount || 0) + offset;
+            const newStatus = newPaid >= row.amount ? 'CLOSED' : 'OPEN';
+            await updateTransaction(row.id, session.userId, { paidAmount: newPaid, status: newStatus });
+            adjustedAmount -= offset;
+          }
+          if (adjustedAmount <= 0) {
+            showAlert(feedback, 'success', 'Debt offset by existing balance. No new debt recorded.');
+            await queueAndSync();
+            resetForm();
+            await refresh();
+            return;
+          }
+        }
+
+        const paidAmount = isDebtType(state.type) ? state.paidAmount : undefined;
+        const computedStatus =
+          state.type === 'BORROWED' || state.type === 'LENT'
+            ? (paidAmount || 0) >= adjustedAmount
+              ? 'CLOSED'
+              : 'OPEN'
+            : undefined;
+        const payload: Omit<TransactionRecord, 'id' | 'createdAt' | 'updatedAt'> = {
+          userId: session.userId,
+          type: state.type,
+          amount: adjustedAmount,
+          category: state.category,
+          date: state.date,
+          notes: state.notes || undefined,
+          personName: state.personName || undefined,
+          dueDate: state.dueDate || undefined,
+          status: computedStatus,
+          paidAmount,
+          isRecurring: false,
+          recurrence: null,
+          nextRun: null,
+          recurrenceEnd: null,
+          isTemplate: false,
+          linkedId: undefined
+        };
+
         if (editingId) {
           await updateTransaction(editingId, session.userId, payload);
           showAlert(feedback, 'success', 'Transaction updated.');
@@ -1508,6 +1536,8 @@ export function renderTransactionsView(root: HTMLElement): void {
         await refresh();
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setButtonLocked(saveButton, false);
       }
     });
 
@@ -1537,6 +1567,7 @@ export function renderTransactionsView(root: HTMLElement): void {
         showAlert(feedback, 'danger', 'End date should be after start date.');
         return;
       }
+      setButtonLocked(recSaveButton, true);
 
       const payload: Omit<TransactionRecord, 'id' | 'createdAt' | 'updatedAt'> = {
         userId: session.userId,
@@ -1573,6 +1604,8 @@ export function renderTransactionsView(root: HTMLElement): void {
         await refresh();
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setButtonLocked(recSaveButton, false);
       }
     });
 
@@ -1591,6 +1624,7 @@ export function renderTransactionsView(root: HTMLElement): void {
         showAlert(feedback, 'danger', 'Target year should be a valid year.');
         return;
       }
+      setButtonLocked(goalSaveButton, true);
       const payload: Omit<GoalPlan, 'id' | 'createdAt' | 'updatedAt'> = {
         userId: session.userId,
         name: state.name,
@@ -1612,6 +1646,8 @@ export function renderTransactionsView(root: HTMLElement): void {
         await refresh();
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setButtonLocked(goalSaveButton, false);
       }
     });
 
@@ -1824,6 +1860,8 @@ export function renderTransactionsView(root: HTMLElement): void {
         return;
       }
       const paymentType: TransactionType = paymentTarget.type === 'BORROWED' ? 'DEBT_REPAY' : 'DEBT_RECEIVE';
+      const payLabel = paymentSave.textContent || 'Save Payment';
+      setBusy(paymentSave, true, payLabel);
       try {
         await addTransaction({
           userId: paymentTarget.userId,
@@ -1854,6 +1892,8 @@ export function renderTransactionsView(root: HTMLElement): void {
         await refresh();
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setBusy(paymentSave, false, payLabel);
       }
     });
 
@@ -1864,21 +1904,27 @@ export function renderTransactionsView(root: HTMLElement): void {
 
     deleteConfirm.addEventListener('click', async () => {
       if (!deletingId) return;
-      try {
-        if (deletingType === 'goal') {
-          await deleteGoal(deletingId, session.userId);
-          showAlert(feedback, 'success', 'Goal deleted.');
-        } else {
-          await deleteTransaction(deletingId, session.userId);
-          showAlert(feedback, 'success', 'Transaction deleted.');
+      const targetId = deletingId;
+      const deleteLabel = deleteConfirm.textContent || 'Delete';
+      setBusy(deleteConfirm, true, deleteLabel);
+      await withRowLock(targetId, async () => {
+        try {
+          if (deletingType === 'goal') {
+            await deleteGoal(targetId, session.userId);
+            showAlert(feedback, 'success', 'Goal deleted.');
+          } else {
+            await deleteTransaction(targetId, session.userId);
+            showAlert(feedback, 'success', 'Transaction deleted.');
+          }
+          await queueAndSync();
+          deletingId = null;
+          closeModal();
+          await refresh();
+        } catch (error) {
+          showAlert(feedback, 'danger', toErrorMessage(error));
         }
-        await queueAndSync();
-        deletingId = null;
-        closeModal();
-        await refresh();
-      } catch (error) {
-        showAlert(feedback, 'danger', toErrorMessage(error));
-      }
+      });
+      setBusy(deleteConfirm, false, deleteLabel);
     });
 
     syncButton.addEventListener('click', async () => {
@@ -1899,3 +1945,4 @@ export function renderTransactionsView(root: HTMLElement): void {
     setRange('30');
   })();
 }
+

@@ -236,7 +236,7 @@ export function renderHoldingsView(root: HTMLElement): void {
       `
     });
 
-    bindShell(root);
+    bindShell(root, session);
     void initCloudSync(session);
 
     const feedback = root.querySelector<HTMLDivElement>('#holdings-feedback');
@@ -623,3 +623,4 @@ export function renderHoldingsView(root: HTMLElement): void {
     }
   })();
 }
+

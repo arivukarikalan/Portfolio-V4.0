@@ -29,6 +29,8 @@ export type ActivityLogEntry = {
 export type SyncState = {
   id: string;
   pendingPayload?: unknown;
+  pendingDirty?: boolean;
+  pendingSince?: string;
   lastSyncedAt?: string;
   lastPullAt?: string;
   lastCloudUpdatedAt?: string;
