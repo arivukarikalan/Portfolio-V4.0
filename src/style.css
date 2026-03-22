@@ -428,6 +428,29 @@ body {
   color: var(--text-strong);
 }
 
+:root[data-theme='dark'] .mobile-bottom-nav-inner {
+  background: rgba(15, 23, 42, 0.92);
+  border-color: var(--surface-4);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.5);
+}
+
+:root[data-theme='dark'] .mobile-nav-item {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .mobile-nav-icon {
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 1px var(--surface-4);
+}
+
+:root[data-theme='dark'] .mobile-nav-item.active {
+  color: #5eead4;
+}
+
+:root[data-theme='dark'] .mobile-nav-item.active svg {
+  stroke: #5eead4;
+}
+
 :root[data-theme='dark'] .section-icon {
   background: #2a1b0b;
   color: #fbbf24;
@@ -472,6 +495,14 @@ body {
 :root[data-theme='dark'] .sync-log-item {
   background: #0b1220;
   border-color: #1f2937;
+}
+
+:root[data-theme='dark'] .sync-log-item .label {
+  color: #e2e8f0;
+}
+
+:root[data-theme='dark'] .sync-log-item .meta {
+  color: #94a3b8;
 }
 
 :root[data-theme='dark'] .sync-status-pill {
@@ -649,7 +680,8 @@ body {
 .sync-panel {
   position: fixed;
   top: 84px;
-  left: calc(var(--sidebar-width) + 16px);
+  right: 16px;
+  left: auto;
   width: min(340px, calc(100vw - 2rem));
   max-height: calc(100vh - 140px);
   background: #ffffff;
@@ -672,6 +704,27 @@ body {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.sync-pending-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #ffffff;
+  box-shadow: 0 6px 12px rgba(15, 23, 42, 0.2);
+}
+
+:root[data-theme='dark'] .sync-pending-badge {
+  border-color: #0b1220;
+  box-shadow: 0 6px 12px rgba(2, 6, 23, 0.4);
 }
 
 .sync-panel-header {
@@ -2693,5 +2746,28 @@ main {
 
   .mobile-nav-item.active svg {
     stroke: #2563eb;
+  }
+
+  :root[data-theme='dark'] .mobile-bottom-nav-inner {
+    background: rgba(15, 23, 42, 0.92);
+    border-color: var(--surface-4);
+    box-shadow: 0 14px 30px rgba(2, 6, 23, 0.5);
+  }
+
+  :root[data-theme='dark'] .mobile-nav-item {
+    color: var(--text-muted);
+  }
+
+  :root[data-theme='dark'] .mobile-nav-icon {
+    background: var(--surface-1);
+    box-shadow: inset 0 0 0 1px var(--surface-4);
+  }
+
+  :root[data-theme='dark'] .mobile-nav-item.active {
+    color: #5eead4;
+  }
+
+  :root[data-theme='dark'] .mobile-nav-item.active svg {
+    stroke: #5eead4;
   }
 }

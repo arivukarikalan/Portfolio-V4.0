@@ -359,6 +359,10 @@ export function renderAdminView(root: HTMLElement): void {
                         <label class="form-label">Snapshot limit</label>
                         <input class="form-control" type="number" min="1" id="config-snapshots" />
                       </div>
+                      <div class="col-md-6">
+                        <label class="form-label">Toast auto-close (sec)</label>
+                        <input class="form-control" type="number" min="1" id="config-toast-close" />
+                      </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2 mt-3">
                       <button class="btn btn-primary" id="config-save">Save Settings</button>
@@ -531,6 +535,7 @@ export function renderAdminView(root: HTMLElement): void {
     const configLive = root.querySelector<HTMLInputElement>('#config-live-price');
     const configCloud = root.querySelector<HTMLInputElement>('#config-cloud-sync');
     const configSnapshots = root.querySelector<HTMLInputElement>('#config-snapshots');
+    const configToastClose = root.querySelector<HTMLInputElement>('#config-toast-close');
     const configSave = root.querySelector<HTMLButtonElement>('#config-save');
     const configTrim = root.querySelector<HTMLButtonElement>('#config-trim');
     const systemActiveUsers = root.querySelector<HTMLElement>('#system-active-users');
@@ -568,6 +573,7 @@ export function renderAdminView(root: HTMLElement): void {
       !configLive ||
       !configCloud ||
       !configSnapshots ||
+      !configToastClose ||
       !configSave ||
       !configTrim ||
       !systemActiveUsers ||
@@ -599,6 +605,26 @@ export function renderAdminView(root: HTMLElement): void {
     let nseRows: NseRow[] = [];
     let nseAnalysis: NseAnalysis | null = null;
     let tickerRequestRows: TickerAdminRequest[] = [];
+    let autoTrimTimer: number | null = null;
+
+    const scheduleAutoTrim = (intervalMin: number) => {
+      if (autoTrimTimer) {
+        window.clearInterval(autoTrimTimer);
+      }
+      if (!currentSession?.adminSessionToken) return;
+      const intervalMs = Math.max(1, Math.floor(intervalMin)) * 60 * 1000;
+      autoTrimTimer = window.setInterval(async () => {
+        if (!currentSession?.adminSessionToken) return;
+        try {
+          await trimSnapshots({
+            adminUserId: currentSession.userId,
+            adminToken: currentSession.adminSessionToken
+          });
+        } catch {
+          // Auto-trim should be quiet on failure.
+        }
+      }, intervalMs);
+    };
 
     const setTab = (name: string) => {
       tabButtons.forEach((btn) => {
@@ -688,7 +714,9 @@ export function renderAdminView(root: HTMLElement): void {
         configLive.value = String(config.livePriceRefreshSec || 60);
         configCloud.value = String(config.cloudSyncIntervalMin || 10);
         configSnapshots.value = String(config.maxSnapshots || 10);
+        configToastClose.value = String(config.toastAutoCloseSec || 7);
         kpiSnapshots.textContent = String(config.maxSnapshots || 10);
+        scheduleAutoTrim(config.cloudSyncIntervalMin || 10);
 
         systemActiveUsers.textContent = String(usersRows.filter((row) => row.status === 'ACTIVE').length);
         systemPendingUsers.textContent = String(pendingRows.length);
@@ -784,8 +812,11 @@ export function renderAdminView(root: HTMLElement): void {
           adminToken: currentSession.adminSessionToken,
           maxSnapshots: Number(configSnapshots.value || 10),
           livePriceRefreshSec: Number(configLive.value || 60),
-          cloudSyncIntervalMin: Number(configCloud.value || 10)
+          cloudSyncIntervalMin: Number(configCloud.value || 10),
+          toastAutoCloseSec: Number(configToastClose.value || 7)
         });
+        document.documentElement.dataset.toastAutoCloseSec = String(Number(configToastClose.value || 7));
+        scheduleAutoTrim(Number(configCloud.value || 10));
         await addActivityLog('config', 'System settings updated');
         showAlert(feedback, 'success', 'Settings saved.');
       } catch (error) {

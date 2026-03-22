@@ -26,6 +26,7 @@ export type AdminConfig = {
   maxSnapshots: number;
   livePriceRefreshSec: number;
   cloudSyncIntervalMin: number;
+  toastAutoCloseSec: number;
 };
 
 export type NseMasterRow = {
@@ -113,7 +114,8 @@ export async function getAdminConfig(adminUserId: string, adminToken: string): P
   return {
     maxSnapshots: Number.isFinite(Number(data.maxSnapshots)) ? Number(data.maxSnapshots) : 10,
     livePriceRefreshSec: Number.isFinite(Number(data.livePriceRefreshSec)) ? Number(data.livePriceRefreshSec) : 60,
-    cloudSyncIntervalMin: Number.isFinite(Number(data.cloudSyncIntervalMin)) ? Number(data.cloudSyncIntervalMin) : 10
+    cloudSyncIntervalMin: Number.isFinite(Number(data.cloudSyncIntervalMin)) ? Number(data.cloudSyncIntervalMin) : 10,
+    toastAutoCloseSec: Number.isFinite(Number(data.toastAutoCloseSec)) ? Number(data.toastAutoCloseSec) : 7
   };
 }
 
@@ -123,6 +125,7 @@ export async function setAdminConfig(input: {
   maxSnapshots: number;
   livePriceRefreshSec: number;
   cloudSyncIntervalMin: number;
+  toastAutoCloseSec: number;
 }): Promise<string> {
   const data = await postApi<{ message: string }>({
     mode: 'set_admin_config',
@@ -130,7 +133,8 @@ export async function setAdminConfig(input: {
     adminToken: input.adminToken,
     maxSnapshots: Math.max(1, Math.floor(input.maxSnapshots)),
     livePriceRefreshSec: Math.max(10, Math.floor(input.livePriceRefreshSec)),
-    cloudSyncIntervalMin: Math.max(1, Math.floor(input.cloudSyncIntervalMin))
+    cloudSyncIntervalMin: Math.max(1, Math.floor(input.cloudSyncIntervalMin)),
+    toastAutoCloseSec: Math.max(1, Math.floor(input.toastAutoCloseSec))
   });
   return data.message || 'Saved';
 }

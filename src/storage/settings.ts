@@ -33,3 +33,8 @@ export async function saveUserSettings(settings: UserSettings): Promise<void> {
   const db = await openFinanceDb();
   await db.put(SETTINGS_STORE, settings);
 }
+
+export async function deleteUserSettings(userId: string): Promise<void> {
+  const db = await openFinanceDb();
+  await db.delete(SETTINGS_STORE, userId);
+}

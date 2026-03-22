@@ -42,6 +42,7 @@ const compactCurrency = new Intl.NumberFormat('en-IN', {
 });
 
 const formatCompactMoney = (value: number) => compactCurrency.format(value);
+const isDarkTheme = () => document.documentElement.getAttribute('data-theme') === 'dark';
 
 function buildTradeRanges(trades: TradeRecord[]): Map<string, { first: string; last: string }> {
   const map = new Map<string, { first: string; last: string }>();
@@ -339,6 +340,8 @@ export function renderHoldingsView(root: HTMLElement): void {
       if (!pieCanvas || !barCanvas) return;
       if (allocationChart) allocationChart.destroy();
       if (topChart) topChart.destroy();
+      const dark = isDarkTheme();
+      const legendText = dark ? '#e2e8f0' : '#334155';
 
       const values = rows
         .map((row) => ({
@@ -374,7 +377,7 @@ export function renderHoldingsView(root: HTMLElement): void {
             ctx.save();
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#0f172a';
+            ctx.fillStyle = dark ? '#e2e8f0' : '#0f172a';
             ctx.font = '600 18px system-ui, -apple-system, "Segoe UI", sans-serif';
             ctx.fillText(formatCompactMoney(totalValue), x, y - 6);
             ctx.fillStyle = '#94a3b8';
@@ -392,7 +395,7 @@ export function renderHoldingsView(root: HTMLElement): void {
                 data: pieData,
                 backgroundColor: chartPalette,
                 borderWidth: 6,
-                borderColor: '#f8fafc',
+                borderColor: dark ? '#0b1220' : '#f8fafc',
                 borderRadius: 12,
                 spacing: 4
               }
@@ -409,6 +412,8 @@ export function renderHoldingsView(root: HTMLElement): void {
               legend: {
                 position: 'bottom',
                 labels: {
+                  color: legendText,
+                  fontColor: legendText,
                   boxWidth: 10,
                   padding: 12,
                   generateLabels(chart: ChartJS) {
@@ -424,7 +429,9 @@ export function renderHoldingsView(root: HTMLElement): void {
                         fillStyle: Array.isArray(dataset.backgroundColor)
                           ? dataset.backgroundColor[index]
                           : dataset.backgroundColor,
-                        strokeStyle: '#ffffff',
+                        strokeStyle: dark ? '#0b1220' : '#ffffff',
+                        color: legendText,
+                        fontColor: legendText,
                         lineWidth: 0,
                         hidden: false,
                         index
@@ -565,6 +572,12 @@ export function renderHoldingsView(root: HTMLElement): void {
       renderKpis(holdings);
       renderCharts(holdings);
     };
+
+    const handleThemeChange = () => {
+      renderCharts(holdings);
+    };
+
+    window.addEventListener('ui-theme-change', handleThemeChange);
 
     const updateFilters = () => {
       filters = {

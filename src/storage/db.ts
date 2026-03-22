@@ -31,6 +31,7 @@ export type SyncState = {
   pendingPayload?: unknown;
   pendingDirty?: boolean;
   pendingSince?: string;
+  pendingChangeCount?: number;
   lastSyncedAt?: string;
   lastPullAt?: string;
   lastCloudUpdatedAt?: string;

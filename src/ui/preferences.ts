@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS: UiSettings = {
 const STORAGE_PREFIX = 'finance_app_v4_ui';
 let systemMediaQuery: MediaQueryList | null = null;
 let systemListener: ((event: MediaQueryListEvent) => void) | null = null;
+let lastAppliedTheme: 'light' | 'dark' | null = null;
 
 const isTheme = (value: string): value is UiTheme =>
   value === 'light' || value === 'dark' || value === 'system';
@@ -35,6 +36,10 @@ const applyResolvedTheme = (theme: 'light' | 'dark') => {
   const root = document.documentElement;
   root.setAttribute('data-theme', theme);
   root.setAttribute('data-bs-theme', theme);
+  if (lastAppliedTheme !== theme) {
+    lastAppliedTheme = theme;
+    window.dispatchEvent(new CustomEvent('ui-theme-change'));
+  }
 };
 
 export function loadUiSettings(userId: string): UiSettings {

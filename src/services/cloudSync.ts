@@ -19,7 +19,7 @@ let priceTimer: number | null = null;
 let pendingTimer: number | null = null;
 let pendingBuild = false;
 let currentStatus: SyncStatus = 'idle';
-let currentConfig: { maxSnapshots: number; livePriceRefreshSec: number; cloudSyncIntervalMin: number } | null = null;
+let currentConfig: { maxSnapshots: number; livePriceRefreshSec: number; cloudSyncIntervalMin: number; toastAutoCloseSec: number } | null = null;
 let panelBound = false;
 const PENDING_DEBOUNCE_MS = 2500;
 
@@ -62,6 +62,9 @@ function pendingSummary(payload?: SnapshotPayload): string {
 
 function pendingStatusLabel(state: Awaited<ReturnType<typeof getSyncState>>): string {
   const payload = state.pendingPayload as SnapshotPayload | undefined;
+  if (state.pendingChangeCount && state.pendingChangeCount > 0) {
+    return `${state.pendingChangeCount} changes`;
+  }
   if (payload) return pendingSummary(payload);
   if (state.pendingDirty) return 'Pending changes';
   return 'No pending changes';
@@ -116,6 +119,7 @@ async function updateNotificationStats(): Promise<void> {
   const panelLastPull = document.querySelector<HTMLElement>('#sync-panel-last-pull');
   const panelLastPrice = document.querySelector<HTMLElement>('#sync-panel-last-price');
   const panelPending = document.querySelector<HTMLElement>('#sync-panel-pending');
+  const pendingBadge = document.querySelector<HTMLElement>('#sync-pending-badge');
   if (panelInterval && currentConfig) {
     panelInterval.textContent = formatInterval(currentConfig.cloudSyncIntervalMin, 'min');
   }
@@ -133,6 +137,18 @@ async function updateNotificationStats(): Promise<void> {
   }
   if (panelPending) {
     panelPending.textContent = pendingStatusLabel(state);
+  }
+  if (pendingBadge) {
+    const count = state.pendingChangeCount || 0;
+    if (count > 0) {
+      pendingBadge.textContent = String(count);
+      pendingBadge.classList.remove('d-none');
+      pendingBadge.setAttribute('aria-label', `${count} pending changes`);
+    } else {
+      pendingBadge.textContent = '';
+      pendingBadge.classList.add('d-none');
+      pendingBadge.setAttribute('aria-label', 'No pending changes');
+    }
   }
   await updateSyncLogSummary();
 }
@@ -169,13 +185,15 @@ async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<
   }
 }
 
-export async function queueSnapshot(userId: string): Promise<void> {
+export async function queueSnapshot(userId: string, options?: { increment?: boolean }): Promise<void> {
   const state = await getSyncState();
+  const increment = options?.increment !== false;
   await setSyncState({
     ...state,
     id: 'sync',
     pendingDirty: true,
-    pendingSince: new Date().toISOString()
+    pendingSince: new Date().toISOString(),
+    pendingChangeCount: increment ? (state.pendingChangeCount || 0) + 1 : state.pendingChangeCount || 0
   });
   if (navigator.onLine) {
     setIndicator('idle', 'Pending');
@@ -218,6 +236,7 @@ export async function syncNow(session: UserSession): Promise<void> {
       id: 'sync',
       pendingDirty: hasNewerChanges,
       pendingSince: hasNewerChanges ? latestState.pendingSince : undefined,
+      pendingChangeCount: hasNewerChanges ? latestState.pendingChangeCount : 0,
       lastSyncedAt: new Date().toISOString(),
       lastCloudUpdatedAt: payload.updatedAt,
       lastError: ''
@@ -226,7 +245,7 @@ export async function syncNow(session: UserSession): Promise<void> {
     await updateNotificationStats();
     setIndicator('idle', 'Synced');
     if (hasNewerChanges) {
-      await queueSnapshot(session.userId);
+      await queueSnapshot(session.userId, { increment: false });
     }
   } catch (error) {
     await setSyncState({
@@ -337,6 +356,7 @@ export async function initCloudSync(session: UserSession): Promise<void> {
     // fallback to defaults when offline
   }
   currentConfig = config;
+  document.documentElement.dataset.toastAutoCloseSec = String(config.toastAutoCloseSec || 7);
   setIndicator(navigator.onLine ? 'idle' : 'offline');
   await updateNotificationStats();
   bindSyncPanel(session);
@@ -395,7 +415,8 @@ async function buildPendingSnapshot(userId: string): Promise<void> {
       ...state,
       id: 'sync',
       pendingDirty: hasNewerChanges,
-      pendingSince: hasNewerChanges ? state.pendingSince : undefined
+      pendingSince: hasNewerChanges ? state.pendingSince : undefined,
+      pendingChangeCount: hasNewerChanges ? state.pendingChangeCount : state.pendingChangeCount || 0
     });
     await updateNotificationStats();
     if (navigator.onLine && !hasNewerChanges) {
@@ -404,7 +425,7 @@ async function buildPendingSnapshot(userId: string): Promise<void> {
         await syncNow(session);
       }
     } else if (hasNewerChanges) {
-      await queueSnapshot(userId);
+      await queueSnapshot(userId, { increment: false });
     }
   } finally {
     pendingBuild = false;
@@ -424,3 +445,4 @@ export function stopCloudSync(): void {
   pendingTimer = null;
   started = false;
 }
+

@@ -28,9 +28,11 @@ type TradeFilters = {
   to: string;
 };
 
+type ImportTrade = TradeInput & { companyName?: string };
+
 type CsvAnalysis = {
   total: number;
-  valid: TradeInput[];
+  valid: ImportTrade[];
   invalid: Array<{ row: number; reason: string }>;
 };
 
@@ -95,10 +97,54 @@ function coerceDate(value: unknown): string {
   return Number.isNaN(date.getTime()) ? asString : date.toISOString().slice(0, 10);
 }
 
+const COMPANY_STOPWORDS = new Set([
+  'LTD',
+  'LIMITED',
+  'PVT',
+  'PRIVATE',
+  'CO',
+  'COMPANY',
+  'CORP',
+  'CORPORATION',
+  'INC',
+  'INCORPORATED',
+  'PLC',
+  'LLP',
+  'INDIA',
+  'IND',
+  'INDUSTRIES',
+  'INDUSTRY',
+  'HOLDINGS',
+  'HOLDING',
+  'INVESTMENTS',
+  'INVESTMENT'
+]);
+
+function normalizeCompanyTokens(value: string): string[] {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !COMPANY_STOPWORDS.has(token));
+}
+
+function inferCompanyName(rawScrip: string, companyCell: string): string {
+  const companyValue = String(companyCell || '').trim();
+  const looksLikeExchange = /NSE|BSE|MCX|NCDEX|CASH|EQ|FUT|OPT/i.test(companyValue);
+  if (companyValue && !looksLikeExchange) {
+    return companyValue;
+  }
+  const raw = String(rawScrip || '').trim();
+  const derived = raw.replace(/^\d+\s*/, '').trim();
+  return derived || companyValue;
+}
+
 function parseCsvTrades(text: string, userId: string): CsvAnalysis {
   const parsed = parseCsvText(text);
   if (!parsed.headers.length) return { total: 0, valid: [], invalid: [] };
   const symbolIdx = headerIndex(parsed.headers, ['symbol', 'ticker', 'scrip', 'stock']);
+  const companyIdx = headerIndex(parsed.headers, ['company', 'company_name', 'stock_name', 'scrip_name', 'name']);
   const sideIdx = headerIndex(parsed.headers, ['side', 'type', 'trade_type', 'buy_sell']);
   const qtyIdx = headerIndex(parsed.headers, ['qty', 'quantity', 'trade_qty']);
   const priceIdx = headerIndex(parsed.headers, ['price', 'trade_price', 'rate']);
@@ -106,13 +152,15 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
   const notesIdx = headerIndex(parsed.headers, ['notes', 'note', 'remarks']);
 
   if (symbolIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
-    throw new Error('CSV headers required: symbol, qty, price (side optional).');
+    throw new Error('Unsupported CSV format. Please upload a broker tradebook CSV with symbol, qty, and price.');
   }
 
-  const valid: TradeInput[] = [];
+  const valid: ImportTrade[] = [];
   const invalid: Array<{ row: number; reason: string }> = [];
   parsed.body.forEach((row, index) => {
-    const symbol = normalizeSymbol(row[symbolIdx]);
+    const rawSymbol = String(row[symbolIdx] || '');
+    const symbol = normalizeSymbol(rawSymbol);
+    const companyName = inferCompanyName(rawSymbol, companyIdx >= 0 ? String(row[companyIdx] || '') : '');
     const side = sideIdx >= 0 ? parseSide(row[sideIdx]) : 'BUY';
     const quantity = Number(row[qtyIdx]);
     const price = Number(row[priceIdx]);
@@ -131,20 +179,21 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
       quantity,
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
-      notes
+      notes,
+      companyName: companyName || undefined
     });
   });
 
   return { total: parsed.body.length, valid, invalid };
 }
 
-function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
-  if (!rows.length) return { total: 0, valid: [], invalid: [] };
+function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null {
+  if (!rows.length) return null;
   let headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell) === 'scrip'));
   if (headerRowIndex < 0) {
     headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell) === 'symbol'));
   }
-  if (headerRowIndex < 0) headerRowIndex = 0;
+  if (headerRowIndex < 0) return null;
 
   const headers = rows[headerRowIndex].map(normalizeHeader);
   const body = rows.slice(headerRowIndex + 1);
@@ -152,16 +201,24 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
   const isTradeBook = headers.includes('scrip') && (headers.includes('b_qty') || headers.includes('s_qty'));
   if (isTradeBook) {
     const scripIdx = headers.indexOf('scrip');
+    const companyIdx = headerIndex(headers, ['company', 'company_name', 'scrip_name', 'stock_name', 'name']);
     const dateIdx = headerIndex(headers, ['date']);
+    const narrationIdx = headerIndex(headers, ['narration', 'remarks']);
     const buyQtyIdx = headerIndex(headers, ['b_qty', 'bqty']);
     const buyRateIdx = headerIndex(headers, ['b_n_rate', 'b_gr_rate', 'b_rate']);
     const sellQtyIdx = headerIndex(headers, ['s_qty', 'sqty']);
     const sellRateIdx = headerIndex(headers, ['s_n_rate', 's_gr_rate', 's_rate']);
 
-    const valid: TradeInput[] = [];
+    const valid: ImportTrade[] = [];
     const invalid: Array<{ row: number; reason: string }> = [];
     body.forEach((row, index) => {
-      const symbol = normalizeSymbol(row[scripIdx]);
+      const narration = narrationIdx >= 0 ? String(row[narrationIdx] || '').toLowerCase() : '';
+      if (narration.includes('carry forward')) {
+        return;
+      }
+      const rawScrip = String(row[scripIdx] || '');
+      const symbol = normalizeSymbol(rawScrip);
+      const companyName = inferCompanyName(rawScrip, companyIdx >= 0 ? String(row[companyIdx] || '') : '');
       const tradeDate = coerceDate(row[dateIdx]);
       const buyQty = buyQtyIdx >= 0 ? Number(row[buyQtyIdx]) : 0;
       const sellQty = sellQtyIdx >= 0 ? Number(row[sellQtyIdx]) : 0;
@@ -180,7 +237,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
           side: 'BUY',
           quantity: buyQty,
           price: buyRate,
-          tradeDate: tradeDate || new Date().toISOString().slice(0, 10)
+          tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+          companyName: companyName || undefined
         });
       }
 
@@ -191,7 +249,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
           side: 'SELL',
           quantity: sellQty,
           price: sellRate,
-          tradeDate: tradeDate || new Date().toISOString().slice(0, 10)
+          tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+          companyName: companyName || undefined
         });
       }
     });
@@ -200,6 +259,7 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
   }
 
   const symbolIdx = headerIndex(headers, ['symbol', 'ticker', 'scrip']);
+  const companyIdx = headerIndex(headers, ['company', 'company_name', 'scrip_name', 'stock_name', 'name']);
   const sideIdx = headerIndex(headers, ['side', 'type', 'trade_type', 'buy_sell']);
   const qtyIdx = headerIndex(headers, ['qty', 'quantity', 'trade_qty']);
   const priceIdx = headerIndex(headers, ['price', 'trade_price', 'rate']);
@@ -207,13 +267,15 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
   const notesIdx = headerIndex(headers, ['notes', 'note', 'remarks']);
 
   if (symbolIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
-    throw new Error('Excel headers required: symbol, qty, price (side optional).');
+    return null;
   }
 
-  const valid: TradeInput[] = [];
+  const valid: ImportTrade[] = [];
   const invalid: Array<{ row: number; reason: string }> = [];
   body.forEach((row, index) => {
-    const symbol = normalizeSymbol(row[symbolIdx]);
+    const rawSymbol = String(row[symbolIdx] || '');
+    const symbol = normalizeSymbol(rawSymbol);
+    const companyName = inferCompanyName(rawSymbol, companyIdx >= 0 ? String(row[companyIdx] || '') : '');
     const side = sideIdx >= 0 ? parseSide(row[sideIdx]) : 'BUY';
     const quantity = Number(row[qtyIdx]);
     const price = Number(row[priceIdx]);
@@ -232,7 +294,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis {
       quantity,
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
-      notes
+      notes,
+      companyName: companyName || undefined
     });
   });
 
@@ -248,9 +311,23 @@ async function parseTradeFile(file: File, userId: string): Promise<CsvAnalysis> 
 
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: 'array' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
-  return parseExcelTrades(rows, userId);
+  let matchedSheets = 0;
+  const combined: CsvAnalysis = { total: 0, valid: [], invalid: [] };
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) return;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+    const analysis = parseExcelTrades(rows, userId);
+    if (!analysis) return;
+    matchedSheets += 1;
+    combined.total += analysis.total;
+    combined.valid.push(...analysis.valid);
+    combined.invalid.push(...analysis.invalid);
+  });
+  if (!matchedSheets) {
+    throw new Error('Unsupported Excel format. Please upload a broker tradebook file.');
+  }
+  return combined;
 }
 
 function renderTableRows(trades: TradeRecord[]): string {
@@ -1264,35 +1341,64 @@ export function renderTradesView(root: HTMLElement): void {
       }
     };
 
-    const resolveImportedSymbol = (rawSymbol: string) => {
+    const resolveImportedSymbol = (rawSymbol: string, companyName?: string) => {
       const normalized = normalizeSymbol(rawSymbol);
-      if (!normalized) return { symbol: '', mapped: false };
-      if (nseSymbols.has(normalized)) return { symbol: normalized, mapped: false };
+      const nameHint =
+        companyName?.trim() || (String(rawSymbol || '').includes(' ') ? String(rawSymbol || '').trim() : '');
+      if (!normalized && !nameHint) return { symbol: '', mapped: false };
+      if (normalized && nseSymbols.has(normalized)) return { symbol: normalized, mapped: false };
       const stripped = stripSeriesSuffix(normalized);
-      if (stripped !== normalized && nseSymbols.has(stripped)) return { symbol: stripped, mapped: true };
-      if (normalized.length < 3) return { symbol: normalized, mapped: false };
+      if (normalized && stripped !== normalized && nseSymbols.has(stripped)) return { symbol: stripped, mapped: true };
 
-      const candidates: Array<{ symbol: string; name: string; initials: string; normName: string }> = nseMasterRows.map(
-        (row) => ({
-          symbol: normalizeSymbol(row.symbol),
-          name: row.name || '',
-          initials: nameInitials(row.name || ''),
-          normName: normalizeName(row.name || '')
-        })
-      );
+      const candidates: Array<{
+        symbol: string;
+        initials: string;
+        normName: string;
+        tokens: string[];
+      }> = nseMasterRows.map((row) => ({
+        symbol: normalizeSymbol(row.symbol),
+        initials: nameInitials(row.name || ''),
+        normName: normalizeName(row.name || ''),
+        tokens: normalizeCompanyTokens(row.name || '')
+      }));
 
-      const startsWithSymbol = candidates.filter((row) => row.symbol.startsWith(normalized));
-      if (startsWithSymbol.length === 1) return { symbol: startsWithSymbol[0].symbol, mapped: true };
+      const findByName = (nameValue: string) => {
+        const normalizedName = normalizeName(nameValue);
+        if (!normalizedName) return null;
+        const exactName = candidates.filter((row) => row.normName === normalizedName);
+        if (exactName.length === 1) return exactName[0].symbol;
+        const startsWithName = candidates.filter((row) => row.normName.startsWith(normalizedName));
+        if (startsWithName.length === 1) return startsWithName[0].symbol;
+        const initials = nameInitials(nameValue);
+        if (initials) {
+          const initialsMatch = candidates.filter((row) => row.initials === initials);
+          if (initialsMatch.length === 1) return initialsMatch[0].symbol;
+        }
+        const tokens = normalizeCompanyTokens(nameValue);
+        if (tokens.length >= 2) {
+          const tokenMatches = candidates.filter((row) => tokens.every((token) => row.tokens.includes(token)));
+          if (tokenMatches.length === 1) return tokenMatches[0].symbol;
+        }
+        if (normalizedName.length >= 5) {
+          const nameContains = candidates.filter((row) => row.normName.includes(normalizedName));
+          if (nameContains.length === 1) return nameContains[0].symbol;
+        }
+        return null;
+      };
 
-      const initialsMatch = candidates.filter((row) => row.initials === normalized);
-      if (initialsMatch.length === 1) return { symbol: initialsMatch[0].symbol, mapped: true };
+      if (nameHint) {
+        const mappedByName = findByName(nameHint);
+        if (mappedByName) return { symbol: mappedByName, mapped: true };
+      }
 
-      const nameStarts = candidates.filter((row) => row.normName.startsWith(normalized));
-      if (nameStarts.length === 1) return { symbol: nameStarts[0].symbol, mapped: true };
+      if (normalized) {
+        const startsWithSymbol = candidates.filter((row) => row.symbol.startsWith(normalized));
+        if (startsWithSymbol.length === 1) return { symbol: startsWithSymbol[0].symbol, mapped: true };
 
-      if (normalized.length >= 5) {
-        const nameContains = candidates.filter((row) => row.normName.includes(normalized));
-        if (nameContains.length === 1) return { symbol: nameContains[0].symbol, mapped: true };
+        if (normalized.length >= 5) {
+          const nameContains = candidates.filter((row) => row.normName.includes(normalized));
+          if (nameContains.length === 1) return { symbol: nameContains[0].symbol, mapped: true };
+        }
       }
 
       return { symbol: normalized, mapped: false };
@@ -1691,7 +1797,7 @@ export function renderTradesView(root: HTMLElement): void {
         }
         let mappedCount = 0;
         analysis.valid.forEach((row) => {
-          const mapped = resolveImportedSymbol(row.symbol);
+          const mapped = resolveImportedSymbol(row.symbol, row.companyName);
           if (mapped.symbol && mapped.symbol !== row.symbol) {
             row.symbol = mapped.symbol;
             mappedCount += 1;
@@ -1705,7 +1811,7 @@ export function renderTradesView(root: HTMLElement): void {
           confirmLabel: 'Import'
         });
         if (!ok) return;
-        await Promise.all(analysis.valid.map((row) => addTrade(row)));
+        await Promise.all(analysis.valid.map(({ companyName: _companyName, ...row }) => addTrade(row)));
         await refreshData();
         await queueAndSync();
         showAlert(

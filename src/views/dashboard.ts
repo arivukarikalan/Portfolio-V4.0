@@ -665,6 +665,7 @@ export function renderDashboardView(root: HTMLElement): void {
               position: 'bottom',
               labels: {
                 color: legendText,
+                fontColor: legendText,
                 boxWidth: 10,
                 padding: 12,
                 generateLabels(chart: ChartJS) {
@@ -681,6 +682,8 @@ export function renderDashboardView(root: HTMLElement): void {
                         ? dataset.backgroundColor[index]
                         : dataset.backgroundColor,
                       strokeStyle: dark ? '#0b1220' : '#ffffff',
+                      color: legendText,
+                      fontColor: legendText,
                       lineWidth: 0,
                       hidden: false,
                       index
@@ -837,6 +840,14 @@ export function renderDashboardView(root: HTMLElement): void {
       renderExposure();
       renderRecent();
     };
+
+    const handleThemeChange = () => {
+      renderTrend();
+      renderAllocation();
+      renderExposure();
+    };
+
+    window.addEventListener('ui-theme-change', handleThemeChange);
 
     refreshButton?.addEventListener('click', async () => {
       if (!refreshButton) return;

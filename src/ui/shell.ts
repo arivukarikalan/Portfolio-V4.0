@@ -131,9 +131,7 @@ export function renderShell(options: {
             <div class="position-relative">
               <button class="btn nav-icon-btn position-relative" id="sync-panel-toggle" type="button" aria-label="Cloud Sync">
                 ${lucideIcon('bell')}
-                <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-white rounded-circle">
-                  <span class="visually-hidden">Sync status</span>
-                </span>
+                <span class="sync-pending-badge position-absolute top-0 start-100 translate-middle d-none" id="sync-pending-badge" aria-live="polite"></span>
               </button>
             </div>
             <div class="position-relative">

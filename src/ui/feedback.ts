@@ -1,12 +1,38 @@
 export type FeedbackTone = 'success' | 'danger' | 'warning' | 'info';
 
+const DEFAULT_AUTO_CLOSE_SEC = 7;
+const autoCloseTimers = new WeakMap<HTMLElement, number>();
+
+function getAutoCloseSeconds(): number {
+  const raw = Number(document.documentElement.dataset.toastAutoCloseSec);
+  if (!Number.isFinite(raw)) return DEFAULT_AUTO_CLOSE_SEC;
+  return Math.max(0, raw);
+}
+
 export function showAlert(target: HTMLElement, tone: FeedbackTone, message: string): void {
   target.className = `alert alert-${tone}`;
   target.textContent = message;
   target.classList.remove('d-none');
+  const existing = autoCloseTimers.get(target);
+  if (existing) {
+    window.clearTimeout(existing);
+    autoCloseTimers.delete(target);
+  }
+  const autoCloseSec = getAutoCloseSeconds();
+  if (autoCloseSec > 0) {
+    const id = window.setTimeout(() => {
+      clearAlert(target);
+    }, autoCloseSec * 1000);
+    autoCloseTimers.set(target, id);
+  }
 }
 
 export function clearAlert(target: HTMLElement): void {
+  const existing = autoCloseTimers.get(target);
+  if (existing) {
+    window.clearTimeout(existing);
+    autoCloseTimers.delete(target);
+  }
   target.classList.add('d-none');
   target.textContent = '';
 }
