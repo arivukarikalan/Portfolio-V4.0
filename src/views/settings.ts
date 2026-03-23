@@ -485,6 +485,9 @@ export function renderSettingsView(root: HTMLElement): void {
               : null;
           const isTemplate = forceTemplate ? true : readBoolean(row.isTemplate);
           const isRecurring = isTemplate || readBoolean(row.isRecurring) || Boolean(recurrence);
+          const statusRaw = readString(row.status);
+          const status =
+            statusRaw === 'CLOSED' ? 'CLOSED' : statusRaw === 'OPEN' ? 'OPEN' : undefined;
           return {
             id,
             userId: session.userId,
@@ -495,7 +498,7 @@ export function renderSettingsView(root: HTMLElement): void {
             notes: readString(row.notes) || undefined,
             personName: readString(row.personName) || null,
             dueDate: readString(row.dueDate) || null,
-            status: readString(row.status) === 'CLOSED' ? 'CLOSED' : readString(row.status) === 'OPEN' ? 'OPEN' : undefined,
+            status: status as TransactionRecord['status'],
             paidAmount: readOptionalNumber(row.paidAmount),
             linkedId: readString(row.linkedId) || null,
             isRecurring,
@@ -505,7 +508,7 @@ export function renderSettingsView(root: HTMLElement): void {
             isTemplate,
             createdAt: normalizeTimestamp(row.createdAt),
             updatedAt: normalizeTimestamp(row.updatedAt)
-          };
+          } as TransactionRecord;
         })
         .filter((row) => row.category && row.date);
 
@@ -513,6 +516,7 @@ export function renderSettingsView(root: HTMLElement): void {
       rows
         .map((row) => {
           const id = readString(row.id) || crypto.randomUUID();
+          const status = readString(row.status) === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE';
           return {
             id,
             userId: session.userId,
@@ -520,11 +524,11 @@ export function renderSettingsView(root: HTMLElement): void {
             targetAmount: readNumber(row.targetAmount),
             targetYear: readNumber(row.targetYear),
             targetDate: readString(row.targetDate) || null,
-            status: readString(row.status) === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE',
+            status: status as GoalPlan['status'],
             notes: readString(row.notes) || undefined,
             createdAt: normalizeTimestamp(row.createdAt),
             updatedAt: normalizeTimestamp(row.updatedAt)
-          };
+          } as GoalPlan;
         })
         .filter((row) => row.name);
 

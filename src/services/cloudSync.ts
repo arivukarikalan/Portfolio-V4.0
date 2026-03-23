@@ -357,7 +357,7 @@ function bindSyncPanel(session: UserSession): void {
 export async function initCloudSync(session: UserSession): Promise<void> {
   if (started) return;
   started = true;
-  let config = { maxSnapshots: 10, livePriceRefreshSec: 60, cloudSyncIntervalMin: 10 };
+  let config = { maxSnapshots: 10, livePriceRefreshSec: 60, cloudSyncIntervalMin: 10, toastAutoCloseSec: 7 };
   try {
     config = await getAppConfig(session.userId);
   } catch {

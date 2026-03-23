@@ -665,7 +665,6 @@ export function renderDashboardView(root: HTMLElement): void {
               position: 'bottom',
               labels: {
                 color: legendText,
-                fontColor: legendText,
                 boxWidth: 10,
                 padding: 12,
                 generateLabels(chart: ChartJS) {
@@ -679,14 +678,13 @@ export function renderDashboardView(root: HTMLElement): void {
                     return {
                       text: `${labelText} (${pct.toFixed(1)}%)`,
                       fillStyle: Array.isArray(dataset.backgroundColor)
-                        ? dataset.backgroundColor[index]
-                        : dataset.backgroundColor,
-                      strokeStyle: dark ? '#0b1220' : '#ffffff',
-                      color: legendText,
-                      fontColor: legendText,
-                      lineWidth: 0,
-                      hidden: false,
-                      index
+                      ? dataset.backgroundColor[index]
+                      : dataset.backgroundColor,
+                    strokeStyle: dark ? '#0b1220' : '#ffffff',
+                    color: legendText,
+                    lineWidth: 0,
+                    hidden: false,
+                    index
                     };
                   });
                 }

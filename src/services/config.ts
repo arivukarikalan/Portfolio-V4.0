@@ -5,6 +5,8 @@ export type AppConfig = {
   livePriceRefreshSec: number;
   cloudSyncIntervalMin: number;
   toastAutoCloseSec: number;
+  snapshotDailyDays?: number;
+  snapshotMonthlyMonths?: number;
 };
 
 export async function getAppConfig(userId: string): Promise<AppConfig> {
@@ -13,6 +15,8 @@ export async function getAppConfig(userId: string): Promise<AppConfig> {
     maxSnapshots: Number(data.maxSnapshots || 10),
     livePriceRefreshSec: Number(data.livePriceRefreshSec || 60),
     cloudSyncIntervalMin: Number(data.cloudSyncIntervalMin || 10),
-    toastAutoCloseSec: Number.isFinite(Number(data.toastAutoCloseSec)) ? Number(data.toastAutoCloseSec) : 7
+    toastAutoCloseSec: Number.isFinite(Number(data.toastAutoCloseSec)) ? Number(data.toastAutoCloseSec) : 7,
+    snapshotDailyDays: Number.isFinite(Number(data.snapshotDailyDays)) ? Number(data.snapshotDailyDays) : 30,
+    snapshotMonthlyMonths: Number.isFinite(Number(data.snapshotMonthlyMonths)) ? Number(data.snapshotMonthlyMonths) : 12
   };
 }

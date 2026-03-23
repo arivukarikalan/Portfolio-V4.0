@@ -58,6 +58,15 @@ type LowConfidenceMapping = {
   count: number;
 };
 
+type ImportSymbolResolution = {
+  symbol: string;
+  mapped: boolean;
+  score?: number;
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  method?: string;
+  reason?: string;
+};
+
 type TradeDisplay =
   | { kind: 'single'; trade: TradeRecord }
   | {
@@ -1566,7 +1575,7 @@ export function renderTradesView(root: HTMLElement): void {
       }
     };
 
-    const resolveImportedSymbol = (rawSymbol: string, companyName?: string) => {
+    const resolveImportedSymbol = (rawSymbol: string, companyName?: string): ImportSymbolResolution => {
       const normalized = normalizeSymbol(rawSymbol);
       const isNumeric = normalized ? /^\d+$/.test(normalized) : false;
       const nameHint =
