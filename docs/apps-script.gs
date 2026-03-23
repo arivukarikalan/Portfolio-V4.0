@@ -6,6 +6,8 @@ const ADMIN_SESSIONS_SHEET = 'AdminSessions';
 const ADMIN_CONFIG_SHEET = 'AdminConfig';
 const TICKER_REQUESTS_SHEET = 'TickerRequests';
 const NSE_MASTER_SHEET = 'NSEMaster';
+const HYBRID_DAILY_RETENTION_DAYS = 30;
+const HYBRID_MONTHLY_RETENTION_MONTHS = 12;
 
 function doGet(e) {
   const mode = String(e.parameter.mode || '').trim();
@@ -528,6 +530,8 @@ function readAdminConfig() {
   let maxSnapshots = 10;
   let livePriceRefreshSec = 60;
   let cloudSyncIntervalMin = 10;
+  let snapshotDailyDays = HYBRID_DAILY_RETENTION_DAYS;
+  let snapshotMonthlyMonths = HYBRID_MONTHLY_RETENTION_MONTHS;
   const sheet = getSheet(ADMIN_CONFIG_SHEET, ['key', 'value']);
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i += 1) {
@@ -545,11 +549,22 @@ function readAdminConfig() {
       const parsed = Number(value || 0);
       cloudSyncIntervalMin = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 10;
     }
+    if (key === 'snapshotDailyDays') {
+      const parsed = Number(value || 0);
+      snapshotDailyDays = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : HYBRID_DAILY_RETENTION_DAYS;
+    }
+    if (key === 'snapshotMonthlyMonths') {
+      const parsed = Number(value || 0);
+      snapshotMonthlyMonths =
+        Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : HYBRID_MONTHLY_RETENTION_MONTHS;
+    }
   }
   return {
     maxSnapshots: maxSnapshots,
     livePriceRefreshSec: livePriceRefreshSec,
-    cloudSyncIntervalMin: cloudSyncIntervalMin
+    cloudSyncIntervalMin: cloudSyncIntervalMin,
+    snapshotDailyDays: snapshotDailyDays,
+    snapshotMonthlyMonths: snapshotMonthlyMonths
   };
 }
 
@@ -574,7 +589,9 @@ function handleGetAdminConfig(body) {
     data: {
       maxSnapshots: config.maxSnapshots,
       livePriceRefreshSec: config.livePriceRefreshSec,
-      cloudSyncIntervalMin: config.cloudSyncIntervalMin
+      cloudSyncIntervalMin: config.cloudSyncIntervalMin,
+      snapshotDailyDays: config.snapshotDailyDays,
+      snapshotMonthlyMonths: config.snapshotMonthlyMonths
     }
   };
 }
@@ -585,9 +602,13 @@ function handleSetAdminConfig(body) {
   const maxSnapshots = Math.max(1, Number(body.maxSnapshots || 10));
   const livePriceRefreshSec = Math.max(10, Number(body.livePriceRefreshSec || 60));
   const cloudSyncIntervalMin = Math.max(1, Number(body.cloudSyncIntervalMin || 10));
+  const snapshotDailyDays = Math.max(1, Number(body.snapshotDailyDays || HYBRID_DAILY_RETENTION_DAYS));
+  const snapshotMonthlyMonths = Math.max(1, Number(body.snapshotMonthlyMonths || HYBRID_MONTHLY_RETENTION_MONTHS));
   setAdminConfigValue('maxSnapshots', String(maxSnapshots));
   setAdminConfigValue('livePriceRefreshSec', String(livePriceRefreshSec));
   setAdminConfigValue('cloudSyncIntervalMin', String(cloudSyncIntervalMin));
+  setAdminConfigValue('snapshotDailyDays', String(snapshotDailyDays));
+  setAdminConfigValue('snapshotMonthlyMonths', String(snapshotMonthlyMonths));
   return { ok: true, data: { message: 'Saved' } };
 }
 
@@ -600,7 +621,9 @@ function handleGetPublicConfig(body) {
     data: {
       maxSnapshots: config.maxSnapshots,
       livePriceRefreshSec: config.livePriceRefreshSec,
-      cloudSyncIntervalMin: config.cloudSyncIntervalMin
+      cloudSyncIntervalMin: config.cloudSyncIntervalMin,
+      snapshotDailyDays: config.snapshotDailyDays,
+      snapshotMonthlyMonths: config.snapshotMonthlyMonths
     }
   };
 }
@@ -920,18 +943,68 @@ function handlePull(e) {
 function trimSnapshotsForUser(userId) {
   const config = readAdminConfig();
   const maxSnapshots = Math.max(1, Number(config.maxSnapshots || 10));
+  const dailyDays = Math.max(1, Number(config.snapshotDailyDays || HYBRID_DAILY_RETENTION_DAYS));
+  const monthlyMonths = Math.max(1, Number(config.snapshotMonthlyMonths || HYBRID_MONTHLY_RETENTION_MONTHS));
   const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
   const values = sheet.getDataRange().getValues();
-  const rowIndexes = [];
+  const rows = [];
   for (let i = 1; i < values.length; i += 1) {
-    if (String(values[i][1] || '').trim() === userId) {
-      rowIndexes.push(i + 1);
+    if (String(values[i][1] || '').trim() !== userId) continue;
+    const ts = String(values[i][0] || '').trim();
+    const date = ts ? new Date(ts) : null;
+    const time = date && !isNaN(date.getTime()) ? date.getTime() : 0;
+    rows.push({ rowIndex: i + 1, time: time, date: date });
+  }
+  if (rows.length <= maxSnapshots) return 0;
+
+  rows.sort(function (a, b) {
+    return b.time - a.time || b.rowIndex - a.rowIndex;
+  });
+
+  const keep = {};
+  const dailyKept = {};
+  const monthlyKept = {};
+  const now = new Date();
+  const dailyCutoff = new Date(now.getTime() - (dailyDays - 1) * 24 * 60 * 60 * 1000);
+  const monthIndex = now.getUTCFullYear() * 12 + now.getUTCMonth();
+  const minMonthIndex = monthIndex - (monthlyMonths - 1);
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (i < maxSnapshots) {
+      keep[row.rowIndex] = true;
+      continue;
+    }
+    if (!row.date || !row.time) continue;
+    if (row.time >= dailyCutoff.getTime()) {
+      const dayKey = Utilities.formatDate(row.date, 'GMT', 'yyyy-MM-dd');
+      if (!dailyKept[dayKey]) {
+        keep[row.rowIndex] = true;
+        dailyKept[dayKey] = true;
+        continue;
+      }
+    }
+    const rowMonthIndex = row.date.getUTCFullYear() * 12 + row.date.getUTCMonth();
+    if (rowMonthIndex >= minMonthIndex) {
+      const monthKey = Utilities.formatDate(row.date, 'GMT', 'yyyy-MM');
+      if (!monthlyKept[monthKey]) {
+        keep[row.rowIndex] = true;
+        monthlyKept[monthKey] = true;
+      }
     }
   }
-  if (rowIndexes.length <= maxSnapshots) return 0;
-  const toDelete = rowIndexes.slice(0, rowIndexes.length - maxSnapshots);
-  for (let i = toDelete.length - 1; i >= 0; i -= 1) {
-    sheet.deleteRow(toDelete[i]);
+
+  const toDelete = [];
+  for (let j = 0; j < rows.length; j += 1) {
+    const rowIndex = rows[j].rowIndex;
+    if (!keep[rowIndex]) {
+      toDelete.push(rowIndex);
+    }
+  }
+  if (!toDelete.length) return 0;
+  toDelete.sort(function (a, b) { return b - a; });
+  for (let k = 0; k < toDelete.length; k += 1) {
+    sheet.deleteRow(toDelete[k]);
   }
   return toDelete.length;
 }

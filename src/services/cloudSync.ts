@@ -9,6 +9,7 @@ import { getAppConfig } from './config';
 import { syncLivePrices } from './livePrices';
 import { upsertLivePrices } from '../storage/prices';
 import { getUserSettings, saveUserSettings } from '../storage/settings';
+import { loadMappingOverrides, mergeMappingOverrides } from '../storage/mappingOverrides';
 import { getSession } from '../storage/db';
 
 type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error';
@@ -52,11 +53,13 @@ function formatInterval(value: number, unit: 'min' | 'sec'): string {
 
 function pendingSummary(payload?: SnapshotPayload): string {
   if (!payload) return '0';
+  const overrideCount = payload.mappingOverrides ? Object.keys(payload.mappingOverrides).length : 0;
   const count =
     (payload.trades?.length || 0) +
     (payload.transactions?.length || 0) +
     (payload.goals?.length || 0) +
-    (payload.settings ? 1 : 0);
+    (payload.settings ? 1 : 0) +
+    overrideCount;
   return `${count} items`;
 }
 
@@ -160,13 +163,15 @@ async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
     listGoals(userId)
   ]);
   const settings = await getUserSettings(userId);
+  const mappingOverrides = loadMappingOverrides();
   return {
     version: 1,
     updatedAt: new Date().toISOString(),
     trades,
     transactions,
     goals,
-    settings
+    settings,
+    mappingOverrides
   };
 }
 
@@ -182,6 +187,9 @@ async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<
   }
   if (payload.settings && payload.settings.userId === userId) {
     await saveUserSettings(payload.settings);
+  }
+  if (payload.mappingOverrides) {
+    mergeMappingOverrides(payload.mappingOverrides);
   }
 }
 

@@ -100,6 +100,13 @@ export type LivePrice = {
   fetchedAt: string;
 };
 
+export type MappingOverride = {
+  symbol: string;
+  updatedAt: string;
+};
+
+export type MappingOverrideMap = Record<string, MappingOverride>;
+
 export type SnapshotPayload = {
   version: number;
   updatedAt: string;
@@ -107,4 +114,5 @@ export type SnapshotPayload = {
   transactions: TransactionRecord[];
   goals?: GoalPlan[];
   settings: UserSettings | null;
+  mappingOverrides?: MappingOverrideMap;
 };

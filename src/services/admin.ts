@@ -27,6 +27,8 @@ export type AdminConfig = {
   livePriceRefreshSec: number;
   cloudSyncIntervalMin: number;
   toastAutoCloseSec: number;
+  snapshotDailyDays?: number;
+  snapshotMonthlyMonths?: number;
 };
 
 export type NseMasterRow = {
@@ -115,7 +117,9 @@ export async function getAdminConfig(adminUserId: string, adminToken: string): P
     maxSnapshots: Number.isFinite(Number(data.maxSnapshots)) ? Number(data.maxSnapshots) : 10,
     livePriceRefreshSec: Number.isFinite(Number(data.livePriceRefreshSec)) ? Number(data.livePriceRefreshSec) : 60,
     cloudSyncIntervalMin: Number.isFinite(Number(data.cloudSyncIntervalMin)) ? Number(data.cloudSyncIntervalMin) : 10,
-    toastAutoCloseSec: Number.isFinite(Number(data.toastAutoCloseSec)) ? Number(data.toastAutoCloseSec) : 7
+    toastAutoCloseSec: Number.isFinite(Number(data.toastAutoCloseSec)) ? Number(data.toastAutoCloseSec) : 7,
+    snapshotDailyDays: Number.isFinite(Number(data.snapshotDailyDays)) ? Number(data.snapshotDailyDays) : 30,
+    snapshotMonthlyMonths: Number.isFinite(Number(data.snapshotMonthlyMonths)) ? Number(data.snapshotMonthlyMonths) : 12
   };
 }
 
@@ -126,6 +130,8 @@ export async function setAdminConfig(input: {
   livePriceRefreshSec: number;
   cloudSyncIntervalMin: number;
   toastAutoCloseSec: number;
+  snapshotDailyDays?: number;
+  snapshotMonthlyMonths?: number;
 }): Promise<string> {
   const data = await postApi<{ message: string }>({
     mode: 'set_admin_config',
@@ -134,7 +140,9 @@ export async function setAdminConfig(input: {
     maxSnapshots: Math.max(1, Math.floor(input.maxSnapshots)),
     livePriceRefreshSec: Math.max(10, Math.floor(input.livePriceRefreshSec)),
     cloudSyncIntervalMin: Math.max(1, Math.floor(input.cloudSyncIntervalMin)),
-    toastAutoCloseSec: Math.max(1, Math.floor(input.toastAutoCloseSec))
+    toastAutoCloseSec: Math.max(1, Math.floor(input.toastAutoCloseSec)),
+    snapshotDailyDays: input.snapshotDailyDays ? Math.max(1, Math.floor(input.snapshotDailyDays)) : 30,
+    snapshotMonthlyMonths: input.snapshotMonthlyMonths ? Math.max(1, Math.floor(input.snapshotMonthlyMonths)) : 12
   });
   return data.message || 'Saved';
 }

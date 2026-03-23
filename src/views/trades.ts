@@ -21,6 +21,7 @@ import { requireSession } from './guards';
 import { formatAmount, formatDate, formatDateTime, formatMoney, formatPct, coerceNumber } from '../utils/format';
 import { nameInitials, normalizeName, normalizeSymbol, stripSeriesSuffix } from '../utils/symbols';
 import { computeCurrentCycleState } from '../utils/tradeCycles';
+import { getOverrideSymbol, setOverrideSymbol } from '../storage/mappingOverrides';
 
 type TradeFilters = {
   query: string;
@@ -28,12 +29,33 @@ type TradeFilters = {
   to: string;
 };
 
-type ImportTrade = TradeInput & { companyName?: string };
+type ImportTrade = TradeInput & {
+  companyName?: string;
+  mappedSymbol?: string;
+  mappingScore?: number;
+  mappingConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  mappingMethod?: string;
+};
 
 type CsvAnalysis = {
   total: number;
   valid: ImportTrade[];
   invalid: Array<{ row: number; reason: string }>;
+};
+
+type ImportFailure = {
+  symbol: string;
+  companyName?: string;
+  reason: string;
+  count: number;
+};
+
+type LowConfidenceMapping = {
+  symbol: string;
+  companyName?: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  score: number;
+  count: number;
 };
 
 type TradeDisplay =
@@ -58,6 +80,8 @@ type TickerSummary = {
   requestStatus?: string;
   livePrice?: number | null;
   changePct?: number | null;
+  needsReview?: boolean;
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
 };
 
 function normalizeHeader(value: unknown): string {
@@ -120,13 +144,148 @@ const COMPANY_STOPWORDS = new Set([
   'INVESTMENT'
 ]);
 
+const COMPANY_ABBREVIATIONS: Record<string, string> = {
+  DEPO: 'DEPOSITORY',
+  DEP: 'DEPOSITORY',
+  DEPOT: 'DEPOSITORY',
+  DEPOS: 'DEPOSITORY',
+  SER: 'SERVICES',
+  SERV: 'SERVICES',
+  SVCS: 'SERVICES',
+  SVC: 'SERVICES',
+  IND: 'INDIA',
+  TECH: 'TECHNOLOGIES',
+  TECHNO: 'TECHNOLOGIES',
+  LAB: 'LABORATORIES',
+  LABS: 'LABORATORIES',
+  SEC: 'SECURITIES',
+  SECU: 'SECURITIES',
+  SECUR: 'SECURITIES'
+};
+
+const IMPORT_CONF_KEY = 'trade_import_confidence_v1';
+
+type ImportConfidenceEntry = {
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  score: number;
+  method: string;
+  updatedAt: string;
+  companyName?: string;
+};
+
+type ImportConfidenceMap = Record<string, ImportConfidenceEntry>;
+
 function normalizeCompanyTokens(value: string): string[] {
   return String(value || '')
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, ' ')
     .split(' ')
     .map((token) => token.trim())
-    .filter((token) => token.length > 1 && !COMPANY_STOPWORDS.has(token));
+    .filter((token) => token.length > 1 && !COMPANY_STOPWORDS.has(token))
+    .map((token) => COMPANY_ABBREVIATIONS[token] || token);
+}
+
+function companyAcronym(tokens: string[]): string {
+  return tokens.map((token) => token[0]).join('');
+}
+
+function confidenceFromScore(score: number): 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (score >= 90) return 'HIGH';
+  if (score >= 80) return 'MEDIUM';
+  return 'LOW';
+}
+
+function levenshtein(a: string, b: string): number {
+  const s = a || '';
+  const t = b || '';
+  const n = s.length;
+  const m = t.length;
+  if (!n) return m;
+  if (!m) return n;
+  const dp = new Array(m + 1).fill(0);
+  for (let j = 0; j <= m; j += 1) dp[j] = j;
+  for (let i = 1; i <= n; i += 1) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= m; j += 1) {
+      const temp = dp[j];
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = temp;
+    }
+  }
+  return dp[m];
+}
+
+function loadImportConfidence(): ImportConfidenceMap {
+  try {
+    const raw = localStorage.getItem(IMPORT_CONF_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ImportConfidenceMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveImportConfidence(map: ImportConfidenceMap): void {
+  try {
+    localStorage.setItem(IMPORT_CONF_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+const REVIEW_APPLIED_KEY = 'trade_mapping_review_applied_v1';
+
+type MappingReviewAppliedMap = Record<string, string>;
+
+function loadReviewApplied(): MappingReviewAppliedMap {
+  try {
+    const raw = localStorage.getItem(REVIEW_APPLIED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as MappingReviewAppliedMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveReviewApplied(map: MappingReviewAppliedMap): void {
+  try {
+    localStorage.setItem(REVIEW_APPLIED_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+
+function normalizeRequestSymbol(rawSymbol: string): string {
+  const raw = String(rawSymbol || '').trim();
+  const reviewMatch = raw.match(/^review[:\s-]+(.+)$/i);
+  return normalizeSymbol(reviewMatch ? reviewMatch[1] : raw);
+}
+
+function isReviewRequest(rawSymbol: string): boolean {
+  return /^review[:\s-]+/i.test(String(rawSymbol || '').trim());
+}
+
+function updateImportConfidence(
+  map: ImportConfidenceMap,
+  symbol: string,
+  entry: ImportConfidenceEntry
+): void {
+  const key = normalizeSymbol(symbol);
+  if (!key) return;
+  const existing = map[key];
+  if (!existing) {
+    map[key] = entry;
+    return;
+  }
+  const rank = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+  if (rank[entry.confidence] > rank[existing.confidence] || entry.score > existing.score) {
+    map[key] = entry;
+  }
 }
 
 function inferCompanyName(rawScrip: string, companyCell: string): string {
@@ -534,7 +693,8 @@ function buildTickerSummary(
   trades: TradeRecord[],
   nseSet: Set<string>,
   requests: TickerRequest[],
-  prices: Map<string, { price?: number | string; changePct?: number | string }>
+  prices: Map<string, { price?: number | string; changePct?: number | string }>,
+  confidenceMap: ImportConfidenceMap
 ): TickerSummary[] {
   const map = new Map<string, TickerSummary>();
   trades.forEach((trade) => {
@@ -542,6 +702,7 @@ function buildTickerSummary(
     if (!symbol) return;
     const existing = map.get(symbol);
     if (!existing) {
+      const confidence = confidenceMap[symbol]?.confidence;
       map.set(symbol, {
         symbol,
         tradeCount: 1,
@@ -549,7 +710,9 @@ function buildTickerSummary(
         valid: nseSet.has(symbol),
         requestStatus: undefined,
         livePrice: null,
-        changePct: null
+        changePct: null,
+        needsReview: confidence ? confidence !== 'HIGH' : false,
+        confidence
       });
       return;
     }
@@ -557,10 +720,18 @@ function buildTickerSummary(
     if (trade.tradeDate > existing.lastTradeDate) {
       existing.lastTradeDate = trade.tradeDate;
     }
+    if (!existing.confidence && confidenceMap[symbol]?.confidence) {
+      existing.confidence = confidenceMap[symbol].confidence;
+      existing.needsReview = existing.confidence !== 'HIGH';
+    }
   });
 
+  const reviewSymbols = new Set<string>();
   requests.forEach((req) => {
-    const symbol = normalizeSymbol(req.rawSymbol);
+    const symbol = normalizeRequestSymbol(req.rawSymbol);
+    if (isReviewRequest(req.rawSymbol)) {
+      reviewSymbols.add(symbol);
+    }
     const existing = map.get(symbol);
     if (existing) {
       existing.requestStatus = req.status;
@@ -572,7 +743,7 @@ function buildTickerSummary(
   });
 
   map.forEach((entry) => {
-    if (entry.valid && entry.requestStatus === 'PENDING') {
+    if (entry.valid && entry.requestStatus === 'PENDING' && !reviewSymbols.has(entry.symbol)) {
       entry.requestStatus = undefined;
     }
   });
@@ -632,6 +803,7 @@ export function renderTradesView(root: HTMLElement): void {
               <input type="file" id="trade-import" accept=".csv,.xlsx,.xls" hidden />
             </label>
           </div>
+          <div id="trade-import-report" class="alert alert-warning d-none mt-2" role="alert"></div>
         </div>
 
         <div class="row g-3 mb-3">
@@ -918,6 +1090,40 @@ export function renderTradesView(root: HTMLElement): void {
             </div>
           </div>
         </div>
+        <div class="app-modal" id="mapping-review-modal" aria-hidden="true">
+          <div class="app-modal-backdrop" data-close="mapping-review"></div>
+          <div class="app-modal-dialog">
+            <div class="card shadow-lg border-0">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h3 class="h6 mb-0">Mapping Review</h3>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="mapping-review-close">Close</button>
+                </div>
+                <div class="text-muted small mb-3">Send the correct NSE ticker so future imports map cleanly.</div>
+                <div class="mb-3">
+                  <label class="form-label small text-muted">Current Ticker</label>
+                  <div class="fw-semibold" id="mapping-review-current">--</div>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label small text-muted">Company Name</label>
+                  <div class="text-muted" id="mapping-review-company">--</div>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Expected NSE Ticker</label>
+                  <input class="form-control" id="mapping-review-expected" placeholder="e.g. GOKULAGRO" />
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Note (optional)</label>
+                  <input class="form-control" id="mapping-review-note" placeholder="Any details" />
+                </div>
+                <div class="d-flex gap-2 justify-content-end">
+                  <button class="btn btn-outline-secondary" type="button" id="mapping-review-cancel">Cancel</button>
+                  <button class="btn btn-primary" type="button" id="mapping-review-submit">Send Review</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <datalist id="nse-symbols"></datalist>
         ${renderConfirmModal()}
       `
@@ -929,6 +1135,7 @@ export function renderTradesView(root: HTMLElement): void {
     const feedback = root.querySelector<HTMLDivElement>('#trade-feedback');
     const tradeAdd = root.querySelector<HTMLButtonElement>('#trade-add');
     const tradeImport = root.querySelector<HTMLInputElement>('#trade-import');
+    const tradeImportReport = root.querySelector<HTMLDivElement>('#trade-import-report');
     const kpiTotal = root.querySelector<HTMLElement>('#kpi-total');
     const kpiOpen = root.querySelector<HTMLElement>('#kpi-open');
     const kpiWinRate = root.querySelector<HTMLElement>('#kpi-winrate');
@@ -977,12 +1184,21 @@ export function renderTradesView(root: HTMLElement): void {
     const requestSymbol = root.querySelector<HTMLInputElement>('#ticker-request-symbol');
     const requestNote = root.querySelector<HTMLInputElement>('#ticker-request-note');
     const requestSubmit = root.querySelector<HTMLButtonElement>('#ticker-request-submit');
+    const mappingReviewModal = root.querySelector<HTMLDivElement>('#mapping-review-modal');
+    const mappingReviewClose = root.querySelector<HTMLButtonElement>('#mapping-review-close');
+    const mappingReviewCancel = root.querySelector<HTMLButtonElement>('#mapping-review-cancel');
+    const mappingReviewSubmit = root.querySelector<HTMLButtonElement>('#mapping-review-submit');
+    const mappingReviewCurrent = root.querySelector<HTMLElement>('#mapping-review-current');
+    const mappingReviewCompany = root.querySelector<HTMLElement>('#mapping-review-company');
+    const mappingReviewExpected = root.querySelector<HTMLInputElement>('#mapping-review-expected');
+    const mappingReviewNote = root.querySelector<HTMLInputElement>('#mapping-review-note');
     const confirmAction = bindConfirmModal(root);
 
     if (
       !feedback ||
       !tradeAdd ||
       !tradeImport ||
+      !tradeImportReport ||
       !kpiTotal ||
       !kpiOpen ||
       !kpiWinRate ||
@@ -1027,7 +1243,15 @@ export function renderTradesView(root: HTMLElement): void {
       !requestCount ||
       !requestSymbol ||
       !requestNote ||
-      !requestSubmit
+      !requestSubmit ||
+      !mappingReviewModal ||
+      !mappingReviewClose ||
+      !mappingReviewCancel ||
+      !mappingReviewSubmit ||
+      !mappingReviewCurrent ||
+      !mappingReviewCompany ||
+      !mappingReviewExpected ||
+      !mappingReviewNote
     ) {
       throw new Error('Trades view failed to initialize');
     }
@@ -1038,6 +1262,7 @@ export function renderTradesView(root: HTMLElement): void {
     let nseMasterRows: NseRow[] = [];
     let tickerRequests: TickerRequest[] = [];
     let tickerRows: TickerSummary[] = [];
+    let importConfidence = loadImportConfidence();
     let userSettings = await getUserSettings(session.userId);
     let tickerSort: { key: 'ticker' | 'ltp' | 'chg' | 'last'; dir: 'asc' | 'desc' } = {
       key: 'ticker',
@@ -1343,65 +1568,231 @@ export function renderTradesView(root: HTMLElement): void {
 
     const resolveImportedSymbol = (rawSymbol: string, companyName?: string) => {
       const normalized = normalizeSymbol(rawSymbol);
+      const isNumeric = normalized ? /^\d+$/.test(normalized) : false;
       const nameHint =
         companyName?.trim() || (String(rawSymbol || '').includes(' ') ? String(rawSymbol || '').trim() : '');
-      if (!normalized && !nameHint) return { symbol: '', mapped: false };
-      if (normalized && nseSymbols.has(normalized)) return { symbol: normalized, mapped: false };
-      const stripped = stripSeriesSuffix(normalized);
-      if (normalized && stripped !== normalized && nseSymbols.has(stripped)) return { symbol: stripped, mapped: true };
+      if (!normalized && !nameHint) return { symbol: '', mapped: false, reason: 'Missing symbol' };
+      const overrideSymbol = getOverrideSymbol(nameHint || '', normalized);
+      if (overrideSymbol) {
+        return {
+          symbol: overrideSymbol,
+          mapped: true,
+          score: 100,
+          confidence: 'HIGH',
+          method: 'override'
+        };
+      }
+      if (!isNumeric && normalized && nseSymbols.has(normalized)) {
+        return { symbol: normalized, mapped: false, score: 100, confidence: 'HIGH', method: 'symbol' };
+      }
+      if (!isNumeric && normalized) {
+        const stripped = stripSeriesSuffix(normalized);
+        if (stripped !== normalized && nseSymbols.has(stripped)) {
+          return { symbol: stripped, mapped: true, score: 95, confidence: 'HIGH', method: 'stripSeries' };
+        }
+      }
 
       const candidates: Array<{
         symbol: string;
         initials: string;
         normName: string;
         tokens: string[];
-      }> = nseMasterRows.map((row) => ({
-        symbol: normalizeSymbol(row.symbol),
-        initials: nameInitials(row.name || ''),
-        normName: normalizeName(row.name || ''),
-        tokens: normalizeCompanyTokens(row.name || '')
-      }));
+        tokenAcronym: string;
+      }> = nseMasterRows.map((row) => {
+        const tokens = normalizeCompanyTokens(row.name || '');
+        return {
+          symbol: normalizeSymbol(row.symbol),
+          initials: nameInitials(row.name || ''),
+          normName: normalizeName(row.name || ''),
+          tokens,
+          tokenAcronym: companyAcronym(tokens)
+        };
+      });
 
-      const findByName = (nameValue: string) => {
+      const scoreCandidate = (nameValue: string, candidate: (typeof candidates)[number]) => {
         const normalizedName = normalizeName(nameValue);
-        if (!normalizedName) return null;
-        const exactName = candidates.filter((row) => row.normName === normalizedName);
-        if (exactName.length === 1) return exactName[0].symbol;
-        const startsWithName = candidates.filter((row) => row.normName.startsWith(normalizedName));
-        if (startsWithName.length === 1) return startsWithName[0].symbol;
-        const initials = nameInitials(nameValue);
-        if (initials) {
-          const initialsMatch = candidates.filter((row) => row.initials === initials);
-          if (initialsMatch.length === 1) return initialsMatch[0].symbol;
+        if (!normalizedName) return { score: 0, coverage: 0, fullMatch: false };
+        if (candidate.normName === normalizedName) return { score: 100, coverage: 1, fullMatch: true };
+        let score = 0;
+        if (candidate.normName.startsWith(normalizedName) || normalizedName.startsWith(candidate.normName)) {
+          score = Math.max(score, 90);
         }
         const tokens = normalizeCompanyTokens(nameValue);
-        if (tokens.length >= 2) {
-          const tokenMatches = candidates.filter((row) => tokens.every((token) => row.tokens.includes(token)));
-          if (tokenMatches.length === 1) return tokenMatches[0].symbol;
+        const tokenMatches = tokens.filter((token) => candidate.tokens.includes(token));
+        const ratio = tokens.length ? tokenMatches.length / tokens.length : 0;
+        const fullMatch = tokens.length > 0 && tokenMatches.length === tokens.length;
+        if (tokens.length) {
+          if (ratio >= 0.95) score = Math.max(score, 95);
+          else if (ratio >= 0.8) score = Math.max(score, 88);
+          else if (ratio >= 0.6) score = Math.max(score, 78);
+          else if (ratio >= 0.4) score = Math.max(score, 68);
         }
-        if (normalizedName.length >= 5) {
-          const nameContains = candidates.filter((row) => row.normName.includes(normalizedName));
-          if (nameContains.length === 1) return nameContains[0].symbol;
+        const acronym = companyAcronym(tokens);
+        if (acronym && candidate.symbol === acronym) score = Math.max(score, 96);
+        if (candidate.tokenAcronym && candidate.symbol === candidate.tokenAcronym) score = Math.max(score, 92);
+        if (normalizedName.length >= 5 && candidate.normName.includes(normalizedName)) score = Math.max(score, 82);
+        if (tokens.some((token) => token === candidate.symbol)) score = Math.max(score, 98);
+        if (tokens.length) {
+          const joined = tokens.join('');
+          const twoTokens = tokens.slice(0, 2).join('');
+          if (candidate.symbol === tokens[0]) score = Math.max(score, 94);
+          if (tokens.length >= 2 && candidate.symbol === twoTokens) score = Math.max(score, 96);
+          if (joined.startsWith(candidate.symbol) || candidate.symbol.startsWith(joined)) {
+            score = Math.max(score, 90);
+          }
+          if (joined.endsWith(candidate.symbol)) {
+            score = Math.max(score, 92);
+          }
+          const numericTokens = tokens.filter((token) => /^\d+$/.test(token));
+          const digitSuffix = numericTokens.join('');
+          const letterAcronym = companyAcronym(tokens.filter((token) => !/^\d+$/.test(token)));
+          if (digitSuffix && candidate.symbol.endsWith(digitSuffix)) {
+            score = Math.max(score, 90);
+            if (letterAcronym && candidate.symbol.startsWith(letterAcronym)) {
+              score = Math.max(score, 94);
+            }
+          }
+          if (tokens.length >= 2) {
+            const tokenPrefixes = tokens.slice(1).map((token) => token.slice(0, 3)).filter(Boolean);
+            if (tokens[0] && tokenPrefixes.length) {
+              const hit = tokenPrefixes.some((prefix) => candidate.symbol.includes(prefix));
+              if (hit && candidate.symbol.startsWith(tokens[0])) {
+                score = Math.max(score, 90);
+              }
+            }
+          }
+          if (tokens.length >= 2) {
+            const altSymbol = `${tokens[0].slice(0, 4)}${tokens[1].slice(0, 4)}`;
+            if (altSymbol && candidate.symbol === altSymbol) {
+              score = Math.max(score, 95);
+            }
+          }
+          if (tokens.length) {
+            const symbolDistance = levenshtein(candidate.symbol, joined.slice(0, candidate.symbol.length + 2));
+            if (symbolDistance <= 2) {
+              score = Math.max(score, 86);
+            }
+          }
         }
-        return null;
+        if (tokens.length >= 2 && ratio < 0.6) {
+          score = Math.min(score, 74);
+        }
+        if (fullMatch) {
+          score = Math.max(score, 92);
+        }
+        return { score, coverage: ratio, fullMatch };
       };
 
       if (nameHint) {
-        const mappedByName = findByName(nameHint);
-        if (mappedByName) return { symbol: mappedByName, mapped: true };
-      }
-
-      if (normalized) {
-        const startsWithSymbol = candidates.filter((row) => row.symbol.startsWith(normalized));
-        if (startsWithSymbol.length === 1) return { symbol: startsWithSymbol[0].symbol, mapped: true };
-
-        if (normalized.length >= 5) {
-          const nameContains = candidates.filter((row) => row.normName.includes(normalized));
-          if (nameContains.length === 1) return { symbol: nameContains[0].symbol, mapped: true };
+        const scored = candidates
+          .map((candidate) => {
+            const scoredCandidate = scoreCandidate(nameHint, candidate);
+            return {
+              symbol: candidate.symbol,
+              score: scoredCandidate.score,
+              coverage: scoredCandidate.coverage,
+              fullMatch: scoredCandidate.fullMatch,
+              tokens: candidate.tokens,
+              symbolLength: candidate.symbol.length
+            };
+          })
+          .filter((entry) => entry.score > 0)
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              Number(b.fullMatch) - Number(a.fullMatch) ||
+              b.coverage - a.coverage ||
+              b.symbolLength - a.symbolLength ||
+              b.tokens.length - a.tokens.length
+          );
+        if (scored.length) {
+          const best = scored[0];
+          if (best.score >= 60) {
+            return {
+              symbol: best.symbol,
+              mapped: true,
+              score: best.score,
+              confidence: confidenceFromScore(best.score),
+              method: 'companyName'
+            };
+          }
+          return {
+            symbol: normalized,
+            mapped: false,
+            reason: `Low confidence match (${best.score}%)`
+          };
         }
       }
 
-      return { symbol: normalized, mapped: false };
+      if (!isNumeric && normalized) {
+        const symbolMatches = candidates.filter((row) => row.symbol.startsWith(normalized));
+        if (symbolMatches.length === 1) {
+          return { symbol: symbolMatches[0].symbol, mapped: true, score: 85, confidence: 'MEDIUM', method: 'symbolPrefix' };
+        }
+      }
+
+      if (isNumeric && !nameHint) {
+        return { symbol: normalized, mapped: false, reason: 'Numeric scrip code without company name' };
+      }
+      if (nameHint) {
+        return { symbol: normalized, mapped: false, reason: 'Company name not found in NSE master' };
+      }
+      if (!normalized) {
+        return { symbol: '', mapped: false, reason: 'Missing symbol' };
+      }
+      if (normalized.length < 3) {
+        return { symbol: normalized, mapped: false, reason: 'Symbol too short' };
+      }
+      return { symbol: normalized, mapped: false, reason: 'Symbol not found in NSE master' };
+    };
+
+    const renderImportReport = (failures: ImportFailure[], lowConfidence: LowConfidenceMapping[]) => {
+      if (!failures.length && !lowConfidence.length) {
+        tradeImportReport.classList.add('d-none');
+        tradeImportReport.textContent = '';
+        return;
+      }
+      const failureRows = failures
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 12)
+        .map((item) => {
+          const label = item.companyName ? `${item.symbol} (${item.companyName})` : item.symbol;
+          return `<div class="d-flex justify-content-between gap-3">
+            <div class="fw-semibold">${label}</div>
+            <div class="text-muted">${item.reason}</div>
+            <div class="text-muted">x${item.count}</div>
+          </div>`;
+        })
+        .join('');
+      const confidenceRows = lowConfidence
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 12)
+        .map((item) => {
+          const label = item.companyName ? `${item.symbol} (${item.companyName})` : item.symbol;
+          const badge =
+            item.confidence === 'HIGH' ? 'text-bg-success' : item.confidence === 'MEDIUM' ? 'text-bg-warning' : 'text-bg-danger';
+          return `<div class="d-flex justify-content-between gap-3">
+            <div class="fw-semibold">${label}</div>
+            <div class="text-muted">Confidence: <span class="badge ${badge}">${item.confidence}</span> (${item.score}%)</div>
+            <div class="text-muted">x${item.count}</div>
+          </div>`;
+        })
+        .join('');
+      tradeImportReport.innerHTML = `
+        ${
+          failureRows
+            ? `<div class="fw-semibold mb-2">Unmapped tickers (top ${Math.min(12, failures.length)})</div>
+               <div class="d-flex flex-column gap-1 small mb-3">${failureRows}</div>`
+            : ''
+        }
+        ${
+          confidenceRows
+            ? `<div class="fw-semibold mb-2">Low confidence mappings (top ${Math.min(12, lowConfidence.length)})</div>
+               <div class="d-flex flex-column gap-1 small">${confidenceRows}</div>`
+            : ''
+        }
+      `;
+      tradeImportReport.classList.remove('d-none');
     };
 
     const applyTickerSort = (rows: TickerSummary[]) => {
@@ -1521,6 +1912,15 @@ export function renderTradesView(root: HTMLElement): void {
         .map((row) => {
           const statusBadge = row.valid ? 'text-bg-success' : 'text-bg-danger';
           const statusLabel = row.valid ? 'VALID' : 'NOT VALID';
+          const confidenceBadge = row.confidence
+            ? `<span class="badge ms-2 ${
+                row.confidence === 'HIGH'
+                  ? 'text-bg-success'
+                  : row.confidence === 'MEDIUM'
+                    ? 'text-bg-warning'
+                    : 'text-bg-danger'
+              }">${row.confidence}</span>`
+            : '';
           const changeClass =
             row.changePct === null || row.changePct === undefined
               ? 'text-muted'
@@ -1528,11 +1928,11 @@ export function renderTradesView(root: HTMLElement): void {
                 ? 'text-success'
                 : 'text-danger';
           const action =
-            row.valid
-              ? '<span class="text-muted">--</span>'
-              : row.requestStatus === 'PENDING'
-                ? '<span class="badge text-bg-warning">Requested</span>'
-                : `<button class="btn btn-sm btn-outline-primary" data-action="request" data-symbol="${row.symbol}">Request</button>`;
+            row.requestStatus === 'PENDING'
+              ? '<span class="badge text-bg-warning">Requested</span>'
+              : `<button class="btn btn-sm btn-outline-primary" data-action="request" data-symbol="${row.symbol}">${
+                  row.valid ? 'Request Review' : 'Request'
+                }</button>`;
           const detailsToggle = `
             <button class="btn btn-link p-0 text-decoration-none mobile-details-toggle d-md-none" data-action="toggle-details" type="button">
               Details
@@ -1540,7 +1940,7 @@ export function renderTradesView(root: HTMLElement): void {
           `;
           return `
             <tr>
-              <td class="col-ticker fw-semibold" data-label="Ticker" data-role="summary" data-summary="ticker">${row.symbol}</td>
+              <td class="col-ticker fw-semibold" data-label="Ticker" data-role="summary" data-summary="ticker">${row.symbol}${confidenceBadge}</td>
               <td class="col-status" data-label="Status" data-role="summary" data-summary="status"><span class="badge ${statusBadge}">${statusLabel}</span></td>
               <td class="col-ltp text-end" data-label="LTP" data-role="summary" data-summary="ltp">${formatMoney(row.livePrice ?? null)}</td>
               <td class="col-chg text-end ${changeClass}" data-label="Chg%" data-role="summary" data-summary="chg">${formatPct(row.changePct ?? null)}</td>
@@ -1573,9 +1973,12 @@ export function renderTradesView(root: HTMLElement): void {
               : row.status === 'REJECTED'
                 ? 'text-bg-danger'
                 : 'text-bg-warning';
+          const review = isReviewRequest(row.rawSymbol);
+          const symbolLabel = normalizeRequestSymbol(row.rawSymbol);
+          const reviewBadge = review ? '<span class="badge text-bg-info ms-2">Review</span>' : '';
           return `
             <tr>
-              <td class="fw-semibold" data-label="Symbol" data-role="summary" data-summary="ticker">${normalizeSymbol(row.rawSymbol)}</td>
+              <td class="fw-semibold" data-label="Symbol" data-role="summary" data-summary="ticker">${symbolLabel}${reviewBadge}</td>
               <td data-label="Status" data-role="summary" data-summary="status"><span class="badge ${badge}">${row.status}</span></td>
               <td data-label="Requested" data-role="detail">${formatDate(row.requestedAt)}</td>
               <td data-label="Resolved" data-role="detail">${row.resolvedAt ? formatDate(row.resolvedAt) : '--'}</td>
@@ -1585,6 +1988,70 @@ export function renderTradesView(root: HTMLElement): void {
         })
         .join('');
       requestCount.textContent = `${rows.length} requests`;
+    };
+
+    let mappingReviewResolver: ((value: { expected: string; note: string } | null) => void) | null = null;
+
+    const closeMappingReview = (result: { expected: string; note: string } | null) => {
+      mappingReviewModal.classList.remove('show');
+      mappingReviewModal.setAttribute('aria-hidden', 'true');
+      if (mappingReviewResolver) {
+        mappingReviewResolver(result);
+        mappingReviewResolver = null;
+      }
+    };
+
+    mappingReviewModal.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target?.dataset?.close === 'mapping-review') {
+        closeMappingReview(null);
+      }
+    });
+
+    mappingReviewClose.addEventListener('click', () => closeMappingReview(null));
+    mappingReviewCancel.addEventListener('click', () => closeMappingReview(null));
+    mappingReviewSubmit.addEventListener('click', () =>
+      closeMappingReview({ expected: mappingReviewExpected.value, note: mappingReviewNote.value })
+    );
+
+    const openMappingReviewModal = (options: { symbol: string; companyName?: string }) =>
+      new Promise<{ expected: string; note: string } | null>((resolve) => {
+        mappingReviewResolver = resolve;
+        mappingReviewCurrent.textContent = options.symbol;
+        mappingReviewCompany.textContent = options.companyName || '--';
+        mappingReviewExpected.value = options.symbol;
+        mappingReviewNote.value = '';
+        mappingReviewModal.classList.add('show');
+        mappingReviewModal.setAttribute('aria-hidden', 'false');
+        mappingReviewExpected.focus();
+      });
+
+    const requestMappingReview = async (symbol: string): Promise<boolean> => {
+      const companyName = importConfidence[symbol]?.companyName || '';
+      const result = await openMappingReviewModal({ symbol, companyName });
+      if (!result) return false;
+      const expected = normalizeSymbol(result.expected);
+      if (!expected) {
+        showAlert(feedback, 'warning', 'Enter a valid expected ticker symbol.');
+        return false;
+      }
+      if (expected === symbol) {
+        showAlert(feedback, 'warning', 'Expected symbol matches the current ticker.');
+      }
+      const noteParts = ['Mapping review', `Current: ${symbol}`, `Expected: ${expected}`];
+      if (companyName) noteParts.push(`Company: ${companyName}`);
+      if (result.note.trim()) noteParts.push(`Note: ${result.note.trim()}`);
+      await createTickerRequest({
+        userId: session.userId,
+        userName: session.name,
+        rawSymbol: `REVIEW:${symbol}`,
+        note: noteParts.join(' | ')
+      });
+      const overrideChanged = setOverrideSymbol(companyName, symbol, expected, { includeSymbol: !companyName });
+      if (overrideChanged) {
+        await queueSnapshot(session.userId);
+      }
+      return true;
     };
 
     const refreshList = () => {
@@ -1612,11 +2079,46 @@ export function renderTradesView(root: HTMLElement): void {
       if (priceLastRefresh) {
         priceLastRefresh.textContent = `Last refresh: ${formatDateTime(latestPriceAt)}`;
       }
-      tickerRows = buildTickerSummary(trades, nseSymbols, tickerRequests, priceMap);
+      tickerRows = buildTickerSummary(trades, nseSymbols, tickerRequests, priceMap, importConfidence);
       const sorted = applyTickerSort(tickerRows);
       renderTickerRows(sorted);
       updateSortIcons();
       renderRequestRows(tickerRequests);
+    };
+
+    const applyReviewApprovals = async (list: TradeRecord[], requests: TickerRequest[]) => {
+      const applied = loadReviewApplied();
+      const updates: Array<Promise<TradeRecord | null>> = [];
+      let changed = false;
+      let appliedChanged = false;
+      requests.forEach((req) => {
+        if (String(req.status || '').toUpperCase() !== 'APPROVED') return;
+        if (!isReviewRequest(req.rawSymbol)) return;
+        const current = normalizeRequestSymbol(req.rawSymbol);
+        const resolved = normalizeSymbol(req.resolvedTicker || '');
+        if (!current || !resolved || current === resolved) return;
+        if (applied[req.requestId] === resolved) return;
+        const overrideChanged = setOverrideSymbol('', current, resolved, { includeSymbol: true });
+        if (overrideChanged) {
+          changed = true;
+        }
+        list.forEach((trade) => {
+          if (normalizeSymbol(trade.symbol) === current) {
+            trade.symbol = resolved;
+            updates.push(updateTrade(trade.id, trade.userId, { symbol: resolved }));
+            changed = true;
+          }
+        });
+        applied[req.requestId] = resolved;
+        appliedChanged = true;
+      });
+      if (updates.length) {
+        await Promise.all(updates);
+      }
+      if (changed || appliedChanged) {
+        saveReviewApplied(applied);
+      }
+      return changed || appliedChanged;
     };
 
     const refreshData = async () => {
@@ -1631,6 +2133,8 @@ export function renderTradesView(root: HTMLElement): void {
       nseSymbols = new Set(masterRows.map((row) => normalizeSymbol(row.symbol)));
       tickerRequests = requests;
       userSettings = settings;
+      const reviewChanged = await applyReviewApprovals(trades, tickerRequests);
+      importConfidence = loadImportConfidence();
       tickerRequests
         .filter((row) => String(row.status || '').toUpperCase() === 'APPROVED' && row.resolvedTicker)
         .forEach((row) => {
@@ -1645,6 +2149,9 @@ export function renderTradesView(root: HTMLElement): void {
       refreshList();
       await refreshTickerPanels();
       renderSymbolOptions();
+      if (reviewChanged) {
+        await queueSnapshot(session.userId);
+      }
     };
 
     tradeAdd.addEventListener('click', () => openModal());
@@ -1789,6 +2296,8 @@ export function renderTradesView(root: HTMLElement): void {
       const file = tradeImport.files?.[0];
       if (!file) return;
       clearAlert(feedback);
+      tradeImportReport.classList.add('d-none');
+      tradeImportReport.textContent = '';
       try {
         const analysis = await parseTradeFile(file, session.userId);
         if (!analysis.valid.length) {
@@ -1796,17 +2305,68 @@ export function renderTradesView(root: HTMLElement): void {
           return;
         }
         let mappedCount = 0;
+        const failureMap = new Map<string, ImportFailure>();
+        const lowConfidenceMap = new Map<string, LowConfidenceMapping>();
+        const confidenceMap = loadImportConfidence();
         analysis.valid.forEach((row) => {
           const mapped = resolveImportedSymbol(row.symbol, row.companyName);
           if (mapped.symbol && mapped.symbol !== row.symbol) {
             row.symbol = mapped.symbol;
             mappedCount += 1;
           }
+          if (mapped.score !== undefined && mapped.confidence) {
+            row.mappedSymbol = mapped.symbol;
+            row.mappingScore = mapped.score;
+            row.mappingConfidence = mapped.confidence;
+            row.mappingMethod = mapped.method;
+            updateImportConfidence(confidenceMap, mapped.symbol, {
+              confidence: mapped.confidence,
+              score: mapped.score,
+              method: mapped.method || 'companyName',
+              updatedAt: new Date().toISOString(),
+              companyName: row.companyName
+            });
+            if (mapped.confidence !== 'HIGH') {
+              const key = `${mapped.symbol}|${row.companyName || ''}|${mapped.confidence}`;
+              const existing = lowConfidenceMap.get(key);
+              if (existing) {
+                existing.count += 1;
+              } else {
+                lowConfidenceMap.set(key, {
+                  symbol: mapped.symbol,
+                  companyName: row.companyName,
+                  confidence: mapped.confidence,
+                  score: mapped.score,
+                  count: 1
+                });
+              }
+            }
+          }
+          if (!mapped.mapped && mapped.reason) {
+            const key = `${row.symbol}|${row.companyName || ''}|${mapped.reason}`;
+            const existing = failureMap.get(key);
+            if (existing) {
+              existing.count += 1;
+            } else {
+              failureMap.set(key, {
+                symbol: row.symbol,
+                companyName: row.companyName,
+                reason: mapped.reason,
+                count: 1
+              });
+            }
+          }
         });
+        saveImportConfidence(confidenceMap);
+        const failures = Array.from(failureMap.values());
+        const lowConfidence = Array.from(lowConfidenceMap.values());
+        const failedCount = failures.reduce((sum, item) => sum + item.count, 0);
         const ok = await confirmAction({
           title: 'Import Trades',
           message: `Import ${analysis.valid.length} trades from this file?${
             mappedCount ? ` (${mappedCount} symbols auto-mapped)` : ''
+          }${failedCount ? ` (${failedCount} trades unmapped)` : ''}${
+            lowConfidence.length ? ` (${lowConfidence.length} low confidence)` : ''
           }`,
           confirmLabel: 'Import'
         });
@@ -1819,6 +2379,7 @@ export function renderTradesView(root: HTMLElement): void {
           'success',
           `Imported ${analysis.valid.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
         );
+        renderImportReport(failures, lowConfidence);
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {
@@ -1953,12 +2514,21 @@ export function renderTradesView(root: HTMLElement): void {
       if (!symbol) return;
       setBusy(actionButton, true, 'Request');
       try {
-        await createTickerRequest({
-          userId: session.userId,
-          userName: session.name,
-          rawSymbol: symbol,
-          note: ''
-        });
+        const row = tickerRows.find((item) => item.symbol === symbol);
+        if (row?.valid) {
+          const sent = await requestMappingReview(symbol);
+          if (!sent) {
+            setBusy(actionButton, false, 'Request');
+            return;
+          }
+        } else {
+          await createTickerRequest({
+            userId: session.userId,
+            userName: session.name,
+            rawSymbol: symbol,
+            note: ''
+          });
+        }
         await refreshData();
         showAlert(feedback, 'success', `Request sent for ${symbol}.`);
       } catch (error) {

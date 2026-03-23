@@ -360,6 +360,14 @@ export function renderAdminView(root: HTMLElement): void {
                         <input class="form-control" type="number" min="1" id="config-snapshots" />
                       </div>
                       <div class="col-md-6">
+                        <label class="form-label">Daily retention (days)</label>
+                        <input class="form-control" type="number" min="1" id="config-snapshot-days" />
+                      </div>
+                      <div class="col-md-6">
+                        <label class="form-label">Monthly retention (months)</label>
+                        <input class="form-control" type="number" min="1" id="config-snapshot-months" />
+                      </div>
+                      <div class="col-md-6">
                         <label class="form-label">Toast auto-close (sec)</label>
                         <input class="form-control" type="number" min="1" id="config-toast-close" />
                       </div>
@@ -535,6 +543,8 @@ export function renderAdminView(root: HTMLElement): void {
     const configLive = root.querySelector<HTMLInputElement>('#config-live-price');
     const configCloud = root.querySelector<HTMLInputElement>('#config-cloud-sync');
     const configSnapshots = root.querySelector<HTMLInputElement>('#config-snapshots');
+    const configSnapshotDays = root.querySelector<HTMLInputElement>('#config-snapshot-days');
+    const configSnapshotMonths = root.querySelector<HTMLInputElement>('#config-snapshot-months');
     const configToastClose = root.querySelector<HTMLInputElement>('#config-toast-close');
     const configSave = root.querySelector<HTMLButtonElement>('#config-save');
     const configTrim = root.querySelector<HTMLButtonElement>('#config-trim');
@@ -573,6 +583,8 @@ export function renderAdminView(root: HTMLElement): void {
       !configLive ||
       !configCloud ||
       !configSnapshots ||
+      !configSnapshotDays ||
+      !configSnapshotMonths ||
       !configToastClose ||
       !configSave ||
       !configTrim ||
@@ -714,6 +726,8 @@ export function renderAdminView(root: HTMLElement): void {
         configLive.value = String(config.livePriceRefreshSec || 60);
         configCloud.value = String(config.cloudSyncIntervalMin || 10);
         configSnapshots.value = String(config.maxSnapshots || 10);
+        configSnapshotDays.value = String(config.snapshotDailyDays || 30);
+        configSnapshotMonths.value = String(config.snapshotMonthlyMonths || 12);
         configToastClose.value = String(config.toastAutoCloseSec || 7);
         kpiSnapshots.textContent = String(config.maxSnapshots || 10);
         scheduleAutoTrim(config.cloudSyncIntervalMin || 10);
@@ -813,7 +827,9 @@ export function renderAdminView(root: HTMLElement): void {
           maxSnapshots: Number(configSnapshots.value || 10),
           livePriceRefreshSec: Number(configLive.value || 60),
           cloudSyncIntervalMin: Number(configCloud.value || 10),
-          toastAutoCloseSec: Number(configToastClose.value || 7)
+          toastAutoCloseSec: Number(configToastClose.value || 7),
+          snapshotDailyDays: Number(configSnapshotDays.value || 30),
+          snapshotMonthlyMonths: Number(configSnapshotMonths.value || 12)
         });
         document.documentElement.dataset.toastAutoCloseSec = String(Number(configToastClose.value || 7));
         scheduleAutoTrim(Number(configCloud.value || 10));
