@@ -6,6 +6,7 @@ import { listTrades, replaceTradesForUser } from '../storage/trades';
 import { listTransactions, replaceTransactionsForUser } from '../storage/transactions';
 import { listGoals, replaceGoalsForUser } from '../storage/goals';
 import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recoveryPlans';
+import { listReentryPlans, replaceReentryPlansForUser } from '../storage/reentryPlans';
 import { getAppConfig } from './config';
 import { syncLivePrices } from './livePrices';
 import { upsertLivePrices } from '../storage/prices';
@@ -61,6 +62,7 @@ function pendingSummary(payload?: SnapshotPayload): string {
     (payload.goals?.length || 0) +
     (payload.settings ? 1 : 0) +
     (payload.recoveryPlans?.length || 0) +
+    (payload.reentryPlans?.length || 0) +
     overrideCount;
   return `${count} items`;
 }
@@ -159,11 +161,12 @@ async function updateNotificationStats(): Promise<void> {
 }
 
 async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
-  const [trades, transactions, goals, recoveryPlans] = await Promise.all([
+  const [trades, transactions, goals, recoveryPlans, reentryPlans] = await Promise.all([
     listTrades(userId),
     listTransactions(userId),
     listGoals(userId),
-    listRecoveryPlans(userId)
+    listRecoveryPlans(userId),
+    listReentryPlans(userId)
   ]);
   const settings = await getUserSettings(userId);
   const mappingOverrides = loadMappingOverrides();
@@ -175,7 +178,8 @@ async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
     goals,
     settings,
     mappingOverrides,
-    recoveryPlans
+    recoveryPlans,
+    reentryPlans
   };
 }
 
@@ -191,6 +195,9 @@ async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<
   }
   if (Array.isArray(payload.recoveryPlans)) {
     await replaceRecoveryPlansForUser(userId, payload.recoveryPlans);
+  }
+  if (Array.isArray(payload.reentryPlans)) {
+    await replaceReentryPlansForUser(userId, payload.reentryPlans);
   }
   if (payload.settings && payload.settings.userId === userId) {
     await saveUserSettings(payload.settings);

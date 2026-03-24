@@ -1740,6 +1740,27 @@ main {
   min-height: 300px;
 }
 
+.recovery-controls {
+  justify-content: flex-end;
+}
+
+.recovery-trend-title {
+  flex: 0 0 auto;
+}
+
+.recovery-trend-controls {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+
+.recovery-controls-group {
+  flex-wrap: wrap;
+}
+
+.recovery-meta {
+  white-space: nowrap;
+}
+
 .chart-empty {
   position: absolute;
   inset: 0;
@@ -2086,6 +2107,61 @@ main {
 @media (max-width: 767.98px) {
   .rec-table {
     min-width: 720px;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .recovery-trend-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.75rem;
+  }
+
+  .recovery-trend-header .section-title {
+    width: 100%;
+  }
+
+  .recovery-controls {
+    width: 100%;
+    justify-content: flex-start;
+    column-gap: 0.5rem;
+    row-gap: 0.5rem;
+  }
+
+  .recovery-trend-controls {
+    width: 100%;
+  }
+
+  .recovery-controls-group {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .recovery-controls-group .btn {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  .recovery-meta {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .recovery-plan-input {
+    width: 100%;
+  }
+
+  .recovery-plan-save {
+    align-self: flex-start;
+  }
+
+  .recovery-trend-chart {
+    min-height: 320px;
+  }
+
+  #recovery-trend-chart {
+    height: 260px !important;
   }
 }
 

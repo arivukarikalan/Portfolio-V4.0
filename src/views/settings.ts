@@ -7,6 +7,8 @@ import type {
   RecoveryLeg,
   RecoveryLossLeg,
   RecoveryPlan,
+  ReentryBuyLeg,
+  ReentryPlan,
   TradeRecord,
   TradeSide,
   TransactionRecord,
@@ -16,6 +18,7 @@ import { listTrades, replaceTradesForUser } from '../storage/trades';
 import { listTransactions, replaceTransactionsForUser } from '../storage/transactions';
 import { listGoals, replaceGoalsForUser } from '../storage/goals';
 import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recoveryPlans';
+import { listReentryPlans, replaceReentryPlansForUser } from '../storage/reentryPlans';
 import { deleteUserSettings, getUserSettings, saveUserSettings } from '../storage/settings';
 import { queueSnapshot } from '../services/cloudSync';
 import { requireSession } from './guards';
@@ -178,7 +181,8 @@ export function renderSettingsView(root: HTMLElement): void {
                   <input class="d-none" type="file" id="settings-import-file" accept=".xlsx,.xls" />
                 </div>
                 <div class="text-muted small mt-2">
-                  Sheets: Trades, Transactions, Recurring, Goals, RecoveryPlans, RecoveryLegs, RecoveryLossLegs, Settings
+                  Sheets: Trades, Transactions, Recurring, Goals, RecoveryPlans, RecoveryLegs, RecoveryLossLegs,
+                  ReentryPlans, ReentryLegs, Settings
                 </div>
               </div>
             </div>
@@ -455,6 +459,10 @@ export function renderSettingsView(root: HTMLElement): void {
       recoveryPlansPresent: boolean;
       recoveryLossLegs: Array<RecoveryLossLeg & { planId: string }>;
       recoveryLossLegsPresent: boolean;
+      reentryPlans: ReentryPlan[];
+      reentryPlansPresent: boolean;
+      reentryLegs: Array<ReentryBuyLeg & { planId: string }>;
+      reentryLegsPresent: boolean;
       settings: Partial<UserSettings> | null;
       settingsPresent: boolean;
     };
@@ -558,6 +566,7 @@ export function renderSettingsView(root: HTMLElement): void {
             id,
             userId: session.userId,
             status: status as RecoveryPlan['status'],
+            name: readString(row.name) || undefined,
             lossTradeId: readString(row.lossTradeId) || undefined,
             lossSymbol: readString(row.lossSymbol),
             lossQuantity: readNumber(row.lossQuantity),
@@ -614,6 +623,51 @@ export function renderSettingsView(root: HTMLElement): void {
         })
         .filter((row) => row.planId && row.symbol);
 
+    const parseReentryPlanRows = (rows: Record<string, unknown>[]): ReentryPlan[] =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          const status = readString(row.status) === 'CLOSED' ? 'CLOSED' : 'ACTIVE';
+          return {
+            id,
+            userId: session.userId,
+            status: status as ReentryPlan['status'],
+            name: readString(row.name) || undefined,
+            symbol: readString(row.symbol),
+            sellTradeId: readString(row.sellTradeId) || undefined,
+            sellQuantity: readNumber(row.sellQuantity),
+            sellPrice: readNumber(row.sellPrice),
+            sellAmount: readNumber(row.sellAmount),
+            lossAmount: readNumber(row.lossAmount),
+            sellTradeDate: normalizeDate(row.sellTradeDate),
+            buybackTrades: [],
+            notes: readString(row.notes) || undefined,
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt),
+            closedAt: readString(row.closedAt) || null
+          } as ReentryPlan;
+        })
+        .filter((row) => row.symbol && row.sellTradeDate);
+
+    const parseReentryLegRows = (rows: Record<string, unknown>[]): Array<ReentryBuyLeg & { planId: string }> =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          return {
+            id,
+            planId: readString(row.planId),
+            tradeId: readString(row.tradeId) || undefined,
+            symbol: readString(row.symbol),
+            quantity: readNumber(row.quantity),
+            buyPrice: readNumber(row.buyPrice),
+            investedAmount: readNumber(row.investedAmount),
+            tradeDate: normalizeDate(row.tradeDate),
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt)
+          } as ReentryBuyLeg & { planId: string };
+        })
+        .filter((row) => row.planId && row.symbol);
+
     const parseSettingsRow = (rows: Record<string, unknown>[]): Partial<UserSettings> | null => {
       if (!rows.length) return null;
       const row = rows[0] || {};
@@ -656,6 +710,8 @@ export function renderSettingsView(root: HTMLElement): void {
       const recoveryPlansSheet = workbook.Sheets['RecoveryPlans'];
       const recoveryLegsSheet = workbook.Sheets['RecoveryLegs'];
       const recoveryLossSheet = workbook.Sheets['RecoveryLossLegs'];
+      const reentryPlansSheet = workbook.Sheets['ReentryPlans'];
+      const reentryLegsSheet = workbook.Sheets['ReentryLegs'];
       const settingsSheet = workbook.Sheets['Settings'];
 
       const tradesRows = tradesSheet ? (XLSX.utils.sheet_to_json(tradesSheet, { defval: '' }) as Record<string, unknown>[]) : [];
@@ -675,6 +731,12 @@ export function renderSettingsView(root: HTMLElement): void {
       const recoveryLossRows = recoveryLossSheet
         ? (XLSX.utils.sheet_to_json(recoveryLossSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
+      const reentryPlanRows = reentryPlansSheet
+        ? (XLSX.utils.sheet_to_json(reentryPlansSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
+      const reentryLegRows = reentryLegsSheet
+        ? (XLSX.utils.sheet_to_json(reentryLegsSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
       const settingsRows = settingsSheet
         ? (XLSX.utils.sheet_to_json(settingsSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
@@ -682,6 +744,8 @@ export function renderSettingsView(root: HTMLElement): void {
       const plans = parseRecoveryPlanRows(recoveryPlanRows);
       const legs = parseRecoveryLegRows(recoveryLegRows);
       const lossLegs = parseRecoveryLossRows(recoveryLossRows);
+      const reentryPlans = parseReentryPlanRows(reentryPlanRows);
+      const reentryLegs = parseReentryLegRows(reentryLegRows);
       if (legs.length && plans.length) {
         const map = new Map(plans.map((plan) => [plan.id, plan]));
         legs.forEach((leg) => {
@@ -705,6 +769,16 @@ export function renderSettingsView(root: HTMLElement): void {
           }
         });
       }
+      if (reentryLegs.length && reentryPlans.length) {
+        const map = new Map(reentryPlans.map((plan) => [plan.id, plan]));
+        reentryLegs.forEach((leg) => {
+          const plan = map.get(leg.planId);
+          if (plan) {
+            const { planId: _planId, ...rest } = leg;
+            plan.buybackTrades.push(rest);
+          }
+        });
+      }
 
       return {
         trades: parseTradeRows(tradesRows),
@@ -719,6 +793,10 @@ export function renderSettingsView(root: HTMLElement): void {
         recoveryPlansPresent: Boolean(recoveryPlansSheet || recoveryLegsSheet || recoveryLossSheet),
         recoveryLossLegs: lossLegs,
         recoveryLossLegsPresent: Boolean(recoveryLossSheet),
+        reentryPlans: reentryPlans,
+        reentryPlansPresent: Boolean(reentryPlansSheet || reentryLegsSheet),
+        reentryLegs: reentryLegs,
+        reentryLegsPresent: Boolean(reentryLegsSheet),
         settings: parseSettingsRow(settingsRows),
         settingsPresent: Boolean(settingsSheet)
       };
@@ -749,6 +827,15 @@ export function renderSettingsView(root: HTMLElement): void {
         } else {
           const existing = await listRecoveryPlans(session.userId);
           await replaceRecoveryPlansForUser(session.userId, mergeById(existing, bundle.recoveryPlans));
+        }
+      }
+
+      if (bundle.reentryPlansPresent) {
+        if (mode === 'replace') {
+          await replaceReentryPlansForUser(session.userId, bundle.reentryPlans);
+        } else {
+          const existing = await listReentryPlans(session.userId);
+          await replaceReentryPlansForUser(session.userId, mergeById(existing, bundle.reentryPlans));
         }
       }
 
@@ -793,6 +880,8 @@ export function renderSettingsView(root: HTMLElement): void {
           <div>Goals: ${bundle.goals.length}</div>
           <div>Recovery Plans: ${bundle.recoveryPlans.length}</div>
           <div>Recovery Loss Legs: ${bundle.recoveryLossLegs.length}</div>
+          <div>Re-entry Plans: ${bundle.reentryPlans.length}</div>
+          <div>Re-entry Legs: ${bundle.reentryLegs.length}</div>
           <div>Settings: ${settingsCount}</div>
         </div>
       `;
@@ -803,11 +892,12 @@ export function renderSettingsView(root: HTMLElement): void {
       const label = exportBtn.textContent || 'Export Excel';
       setBusy(exportBtn, true, label);
       try {
-        const [trades, transactions, goals, recoveryPlans, settings] = await Promise.all([
+        const [trades, transactions, goals, recoveryPlans, reentryPlans, settings] = await Promise.all([
           listTrades(session.userId),
           listTransactions(session.userId),
           listGoals(session.userId),
           listRecoveryPlans(session.userId),
+          listReentryPlans(session.userId),
           getUserSettings(session.userId)
         ]);
         const history = transactions.filter((row) => !row.isTemplate);
@@ -885,6 +975,7 @@ export function renderSettingsView(root: HTMLElement): void {
         const recoveryPlanRows = recoveryPlans.map((plan) => ({
           id: plan.id,
           status: plan.status,
+          name: plan.name ?? '',
           lossTradeId: plan.lossTradeId ?? '',
           lossSymbol: plan.lossSymbol,
           lossQuantity: plan.lossQuantity,
@@ -944,6 +1035,38 @@ export function renderSettingsView(root: HTMLElement): void {
             updatedAt: leg.updatedAt
           }));
         });
+
+        const reentryPlanRows = reentryPlans.map((plan) => ({
+          id: plan.id,
+          status: plan.status,
+          name: plan.name ?? '',
+          symbol: plan.symbol,
+          sellTradeId: plan.sellTradeId ?? '',
+          sellQuantity: plan.sellQuantity,
+          sellPrice: plan.sellPrice,
+          sellAmount: plan.sellAmount,
+          lossAmount: plan.lossAmount,
+          sellTradeDate: plan.sellTradeDate,
+          notes: plan.notes ?? '',
+          createdAt: plan.createdAt,
+          updatedAt: plan.updatedAt,
+          closedAt: plan.closedAt ?? ''
+        }));
+
+        const reentryLegRows = reentryPlans.flatMap((plan) =>
+          plan.buybackTrades.map((leg) => ({
+            id: leg.id,
+            planId: plan.id,
+            tradeId: leg.tradeId ?? '',
+            symbol: leg.symbol,
+            quantity: leg.quantity,
+            buyPrice: leg.buyPrice,
+            investedAmount: leg.investedAmount,
+            tradeDate: leg.tradeDate,
+            createdAt: leg.createdAt,
+            updatedAt: leg.updatedAt
+          }))
+        );
 
         const settingsRows = [
           {
@@ -1049,6 +1172,7 @@ export function renderSettingsView(root: HTMLElement): void {
           makeSheet(recoveryPlanRows, [
             'id',
             'status',
+            'name',
             'lossTradeId',
             'lossSymbol',
             'lossQuantity',
@@ -1094,6 +1218,42 @@ export function renderSettingsView(root: HTMLElement): void {
             'updatedAt'
           ]),
           'RecoveryLossLegs'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(reentryPlanRows, [
+            'id',
+            'status',
+            'name',
+            'symbol',
+            'sellTradeId',
+            'sellQuantity',
+            'sellPrice',
+            'sellAmount',
+            'lossAmount',
+            'sellTradeDate',
+            'notes',
+            'createdAt',
+            'updatedAt',
+            'closedAt'
+          ]),
+          'ReentryPlans'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(reentryLegRows, [
+            'id',
+            'planId',
+            'tradeId',
+            'symbol',
+            'quantity',
+            'buyPrice',
+            'investedAmount',
+            'tradeDate',
+            'createdAt',
+            'updatedAt'
+          ]),
+          'ReentryLegs'
         );
         XLSX.utils.book_append_sheet(
           wb,
@@ -1146,6 +1306,8 @@ export function renderSettingsView(root: HTMLElement): void {
           pendingImport.goalsPresent ||
           pendingImport.recoveryPlansPresent ||
           pendingImport.recoveryLossLegsPresent ||
+          pendingImport.reentryPlansPresent ||
+          pendingImport.reentryLegsPresent ||
           pendingImport.settingsPresent;
         if (!hasAnySheet) {
           pendingImport = null;

@@ -104,6 +104,7 @@ export type RecoveryPlan = {
   id: string;
   userId: string;
   status: 'ACTIVE' | 'CLOSED';
+  name?: string;
   lossTradeId?: string;
   lossSymbol: string;
   lossQuantity: number;
@@ -113,6 +114,37 @@ export type RecoveryPlan = {
   lossHoldDays?: number | null;
   lossTrades?: RecoveryLossLeg[];
   recoveryTrades: RecoveryLeg[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+};
+
+export type ReentryBuyLeg = {
+  id: string;
+  tradeId?: string;
+  symbol: string;
+  quantity: number;
+  buyPrice: number;
+  tradeDate: string;
+  investedAmount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReentryPlan = {
+  id: string;
+  userId: string;
+  status: 'ACTIVE' | 'CLOSED';
+  name?: string;
+  symbol: string;
+  sellTradeId?: string;
+  sellQuantity: number;
+  sellPrice: number;
+  sellAmount: number;
+  lossAmount: number;
+  sellTradeDate: string;
+  buybackTrades: ReentryBuyLeg[];
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -159,4 +191,5 @@ export type SnapshotPayload = {
   settings: UserSettings | null;
   mappingOverrides?: MappingOverrideMap;
   recoveryPlans?: RecoveryPlan[];
+  reentryPlans?: ReentryPlan[];
 };

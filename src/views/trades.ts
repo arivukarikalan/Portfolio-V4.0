@@ -1,11 +1,21 @@
 import * as XLSX from 'xlsx';
+import Chart from 'chart.js/auto';
+import type { Chart as ChartJS, ChartConfiguration } from 'chart.js';
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
 import { renderConfirmModal, bindConfirmModal } from '../ui/confirm';
 import { addTrade, deleteTrade, listTrades, updateTrade, type TradeInput } from '../storage/trades';
 import { getUserSettings } from '../storage/settings';
-import type { RecoveryLeg, RecoveryLossLeg, RecoveryPlan, TradeRecord, TradeSide } from '../core/types';
+import type {
+  RecoveryLeg,
+  RecoveryLossLeg,
+  RecoveryPlan,
+  ReentryBuyLeg,
+  ReentryPlan,
+  TradeRecord,
+  TradeSide
+} from '../core/types';
 import { parseCsvText } from '../utils/csv';
 import { toErrorMessage } from '../utils/errors';
 import {
@@ -17,7 +27,9 @@ import {
 } from '../services/tickers';
 import { initCloudSync, queueSnapshot, syncNow } from '../services/cloudSync';
 import { listLivePrices } from '../storage/prices';
+import { fetchPriceHistory, type PriceHistoryPoint } from '../services/priceHistory';
 import { addRecoveryPlan, deleteRecoveryPlan, listRecoveryPlans, updateRecoveryPlan } from '../storage/recoveryPlans';
+import { addReentryPlan, deleteReentryPlan, listReentryPlans, updateReentryPlan } from '../storage/reentryPlans';
 import { requireSession } from './guards';
 import { formatAmount, formatDate, formatDateTime, formatMoney, formatPct, coerceNumber } from '../utils/format';
 import { nameInitials, normalizeName, normalizeSymbol, stripSeriesSuffix } from '../utils/symbols';
@@ -107,6 +119,18 @@ type RecoveryPlanSummary = RecoveryPlan & {
   recoveryPct: number | null;
   isRecovered: boolean;
   legs: RecoveryLegSummary[];
+};
+
+type ReentryPlanSummary = ReentryPlan & {
+  buybackQty: number;
+  buybackInvested: number;
+  buybackAvg: number | null;
+  lossPerShare: number | null;
+  allocatedLoss: number;
+  reentryGain: number;
+  remainingLoss: number;
+  breakEvenLtp: number | null;
+  targetLtp: number | null;
 };
 
 function normalizeHeader(value: unknown): string {
@@ -833,7 +857,8 @@ export function renderTradesView(root: HTMLElement): void {
       { id: 'list', label: 'Ticker List', href: 'trades.html#list', icon: 'list' },
       { id: 'request', label: 'Ticker Request', href: 'trades.html#request', icon: 'send' },
       { id: 'history', label: 'Trade History', href: 'trades.html#history', icon: 'history' },
-      { id: 'recovery', label: 'Recovery Plans', href: 'trades.html#recovery', icon: 'rotate-cw' }
+      { id: 'recovery', label: 'Recovery Plans', href: 'trades.html#recovery', icon: 'rotate-cw' },
+      { id: 'reentry', label: 'Intraday Analysis', href: 'trades.html#reentry', icon: 'repeat' }
     ];
 
     root.innerHTML = renderShell({
@@ -1047,7 +1072,7 @@ export function renderTradesView(root: HTMLElement): void {
                   <button class="btn btn-outline-secondary btn-sm" id="filter-clear">Clear</button>
                 </div>
               </div>
-              <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="d-flex justify-content-between align-items-center mb-2 recovery-trend-header">
                 <h2 class="h6 mb-0 section-title">
                   <span class="section-icon">${lucideIcon('history')}</span>
                   Trade History
@@ -1076,47 +1101,48 @@ export function renderTradesView(root: HTMLElement): void {
         </section>
 
         <section class="trade-tab d-none" data-trade-panel="recovery">
-          <div class="card shadow-sm border-0 mb-3">
-            <div class="card-body">
-              <div class="d-flex justify-content-between align-items-center mb-2">
-                <h2 class="h6 mb-0 section-title">
-                  <span class="section-icon">${lucideIcon('rotate-cw')}</span>
-                  Recovery Dashboard
-                </h2>
-                <div class="text-muted small" id="recovery-summary-updated">--</div>
-              </div>
-              <div class="row g-2">
-                <div class="col-sm-6 col-lg-3">
-                  <div class="kpi-card">
-                    <div class="text-muted small">Active Plans</div>
-                    <div class="h5 mb-0" id="recovery-active">0</div>
+          <div class="row g-3 mb-3">
+            <div class="col-xl-5">
+              <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h2 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('rotate-cw')}</span>
+                      Recovery Dashboard
+                    </h2>
+                    <div class="text-muted small" id="recovery-summary-updated">--</div>
                   </div>
-                </div>
-                <div class="col-sm-6 col-lg-3">
-                  <div class="kpi-card">
-                    <div class="text-muted small">Recovered Plans</div>
-                    <div class="h5 mb-0" id="recovery-recovered">0</div>
-                  </div>
-                </div>
-                <div class="col-sm-6 col-lg-3">
-                  <div class="kpi-card">
-                    <div class="text-muted small">Recovery Win %</div>
-                    <div class="h5 mb-0" id="recovery-win">--</div>
-                  </div>
-                </div>
-                <div class="col-sm-6 col-lg-3">
-                  <div class="kpi-card">
-                    <div class="text-muted small">Net Recovery (Live)</div>
-                    <div class="h5 mb-0" id="recovery-net">--</div>
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <div class="kpi-card">
+                        <div class="text-muted small">Active Plans</div>
+                        <div class="h5 mb-0" id="recovery-active">0</div>
+                      </div>
+                    </div>
+                    <div class="col-6">
+                      <div class="kpi-card">
+                        <div class="text-muted small">Recovered Plans</div>
+                        <div class="h5 mb-0" id="recovery-recovered">0</div>
+                      </div>
+                    </div>
+                    <div class="col-6">
+                      <div class="kpi-card">
+                        <div class="text-muted small">Recovery Win %</div>
+                        <div class="h5 mb-0" id="recovery-win">--</div>
+                      </div>
+                    </div>
+                    <div class="col-6">
+                      <div class="kpi-card">
+                        <div class="text-muted small">Net Recovery (Live)</div>
+                        <div class="h5 mb-0" id="recovery-net">--</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-
-          <div class="row g-3">
             <div class="col-xl-7">
-              <div class="card shadow-sm border-0">
+              <div class="card shadow-sm border-0 h-100">
                 <div class="card-body">
                   <div class="d-flex justify-content-between align-items-center mb-2">
                     <h3 class="h6 mb-0 section-title">
@@ -1143,19 +1169,169 @@ export function renderTradesView(root: HTMLElement): void {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2 recovery-trend-header">
+                <div class="recovery-trend-title">
+                  <h3 class="h6 mb-0 section-title">
+                    <span class="section-icon">${lucideIcon('line-chart')}</span>
+                    Recovery Trend
+                  </h3>
+                </div>
+                <div class="d-flex align-items-center gap-2 flex-wrap recovery-controls recovery-trend-controls">
+                  <div class="btn-group btn-group-sm recovery-controls-group" role="group">
+                    <button class="btn btn-outline-secondary" data-recovery-pen="lossTarget" type="button">
+                      Loss Target
+                    </button>
+                    <button class="btn btn-outline-secondary" data-recovery-pen="recovered" type="button">
+                      Recovered
+                    </button>
+                    <button class="btn btn-outline-secondary" data-recovery-pen="breakEven" type="button">
+                      Break-even
+                    </button>
+                    <button class="btn btn-outline-secondary" data-recovery-pen="tradeALtp" type="button">
+                      Trade A Avg LTP
+                    </button>
+                    <button class="btn btn-outline-secondary" data-recovery-pen="tradeBLtp" type="button">
+                      Trade B Avg LTP
+                    </button>
+                  </div>
+                  <div class="text-muted small recovery-meta" id="recovery-trend-loss-date">Loss sold: --</div>
+                  <div class="text-muted small recovery-meta" id="recovery-trend-recovery-date">Recovery start: --</div>
+                  <div class="btn-group btn-group-sm recovery-controls-group" role="group">
+                    <button class="btn btn-outline-secondary" data-recovery-view="index" type="button">Index</button>
+                    <button class="btn btn-outline-secondary" data-recovery-view="return" type="button">Return %</button>
+                    <button class="btn btn-outline-secondary" data-recovery-view="ltp" type="button">LTP</button>
+                  </div>
+                  <div class="btn-group btn-group-sm recovery-controls-group" role="group">
+                    <button class="btn btn-outline-secondary" data-recovery-range="7d" type="button">1W</button>
+                    <button class="btn btn-outline-secondary" data-recovery-range="1m" type="button">1M</button>
+                    <button class="btn btn-outline-secondary" data-recovery-range="3m" type="button">3M</button>
+                    <button class="btn btn-outline-secondary" data-recovery-range="6m" type="button">6M</button>
+                    <button class="btn btn-outline-secondary" data-recovery-range="all" type="button">All</button>
+                  </div>
+                  <input
+                    class="form-control form-control-sm recovery-plan-input"
+                    id="recovery-plan-title"
+                    placeholder="Plan name"
+                  />
+                  <button class="btn btn-sm btn-outline-primary recovery-plan-save" id="recovery-plan-title-save" type="button">
+                    Save
+                  </button>
+                </div>
+              </div>
+              <div class="chart-wrap recovery-trend-chart">
+                <canvas id="recovery-trend-chart" height="200"></canvas>
+                <div class="chart-empty text-muted small d-none" id="recovery-trend-empty">
+                  Select a recovery plan to see the trend.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-xl-6">
+              <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('trending-down')}</span>
+                      Trade A (Loss)
+                    </h3>
+                    <div class="text-muted small" id="recovery-loss-title">--</div>
+                  </div>
+                  <div id="recovery-compare-loss" class="text-muted small">Select a plan to see loss details.</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-xl-6">
+              <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('trending-up')}</span>
+                      Trade B (Recovery)
+                    </h3>
+                    <div class="text-muted small" id="recovery-recovery-title">--</div>
+                  </div>
+                  <div id="recovery-compare-recovery" class="text-muted small">
+                    Select a plan to see recovery details.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="trade-tab d-none" data-trade-panel="reentry">
+          <div class="row g-3 mb-3">
             <div class="col-xl-5">
               <div class="card shadow-sm border-0 h-100">
                 <div class="card-body">
                   <div class="d-flex justify-content-between align-items-center mb-2">
                     <h3 class="h6 mb-0 section-title">
-                      <span class="section-icon">${lucideIcon('activity')}</span>
-                      Plan Comparison
+                      <span class="section-icon">${lucideIcon('corner-down-right')}</span>
+                      Sell Loss Candidates
                     </h3>
-                    <div class="text-muted small" id="recovery-detail-title">Select a plan</div>
+                    <div class="text-muted small" id="reentry-candidate-count">0 trades</div>
                   </div>
-                  <div id="recovery-detail" class="text-muted small">Choose a plan to compare Trade A vs Trade B.</div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Sell</th>
+                          <th>Loss</th>
+                          <th class="text-end">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody id="reentry-candidates-body"></tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
+            </div>
+            <div class="col-xl-7">
+              <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('repeat')}</span>
+                      Re-entry Plans
+                    </h3>
+                    <div class="text-muted small" id="reentry-count">0 plans</div>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th>Plan</th>
+                          <th>Loss</th>
+                          <th>Buyback Qty</th>
+                          <th>Break-even</th>
+                          <th class="text-end">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody id="reentry-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card shadow-sm border-0">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h3 class="h6 mb-0 section-title">
+                  <span class="section-icon">${lucideIcon('activity')}</span>
+                  Plan Analysis
+                </h3>
+                <div class="text-muted small" id="reentry-detail-title">Select a plan to see analysis.</div>
+              </div>
+              <div id="reentry-detail-body" class="text-muted small">Select a plan to see analysis.</div>
             </div>
           </div>
         </section>
@@ -1242,6 +1418,10 @@ export function renderTradesView(root: HTMLElement): void {
                   <h3 class="h6 mb-0" id="recovery-modal-title">Create Recovery Plan</h3>
                   <button class="btn btn-sm btn-outline-secondary" type="button" id="recovery-modal-close">Close</button>
                 </div>
+                <div class="mb-3">
+                  <label class="form-label">Plan Name</label>
+                  <input class="form-control" id="recovery-plan-name" placeholder="e.g. Recovery Plan A" />
+                </div>
                 <div class="border rounded-3 p-3 mb-3 bg-light">
                   <div class="d-flex justify-content-between align-items-center mb-2">
                     <div class="fw-semibold">Loss Trades (A)</div>
@@ -1301,6 +1481,59 @@ export function renderTradesView(root: HTMLElement): void {
                 <div class="d-flex gap-2 justify-content-end">
                   <button class="btn btn-outline-secondary" type="button" id="recovery-cancel">Cancel</button>
                   <button class="btn btn-primary" type="button" id="recovery-save">Save Plan</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="app-modal" id="reentry-modal" aria-hidden="true">
+          <div class="app-modal-backdrop" data-close="reentry"></div>
+          <div class="app-modal-dialog">
+            <div class="card shadow-lg border-0">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h3 class="h6 mb-0" id="reentry-modal-title">Create Re-entry Plan</h3>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="reentry-modal-close">Close</button>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Plan Name</label>
+                  <input class="form-control" id="reentry-plan-name" placeholder="e.g. Re-entry Plan A" />
+                </div>
+                <div class="border rounded-3 p-3 mb-3 bg-light">
+                  <div class="fw-semibold mb-1">Sell Trade (Loss)</div>
+                  <div class="small text-muted" id="reentry-sell-meta">--</div>
+                  <div class="d-flex justify-content-between align-items-center small mt-2">
+                    <div><span class="text-muted">Loss:</span> <span id="reentry-loss-amount">--</span></div>
+                    <div><span class="text-muted">Qty:</span> <span id="reentry-sell-qty">--</span></div>
+                  </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  <select class="form-select form-select-sm w-auto" id="reentry-buy-trade">
+                    <option value="">Add from BUY trade...</option>
+                  </select>
+                  <button class="btn btn-sm btn-outline-primary" type="button" id="reentry-buy-add">Add Buyback</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="reentry-buy-add-manual">Add Manual</button>
+                </div>
+                <div class="table-responsive mb-3">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>Qty</th>
+                        <th>Buy Price</th>
+                        <th>Trade Date</th>
+                        <th class="text-end">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="reentry-buys-body"></tbody>
+                  </table>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Notes</label>
+                  <input class="form-control" id="reentry-notes" placeholder="Optional note" />
+                </div>
+                <div class="d-flex justify-content-end gap-2">
+                  <button class="btn btn-outline-secondary" type="button" id="reentry-cancel">Cancel</button>
+                  <button class="btn btn-primary" type="button" id="reentry-save">Save Plan</button>
                 </div>
               </div>
             </div>
@@ -1407,13 +1640,25 @@ export function renderTradesView(root: HTMLElement): void {
     const recoveryNet = root.querySelector<HTMLElement>('#recovery-net');
     const recoveryCount = root.querySelector<HTMLElement>('#recovery-count');
     const recoveryBody = root.querySelector<HTMLTableSectionElement>('#recovery-body');
-    const recoveryDetail = root.querySelector<HTMLDivElement>('#recovery-detail');
-    const recoveryDetailTitle = root.querySelector<HTMLElement>('#recovery-detail-title');
+    const recoveryTrendCanvas = root.querySelector<HTMLCanvasElement>('#recovery-trend-chart');
+    const recoveryTrendEmpty = root.querySelector<HTMLDivElement>('#recovery-trend-empty');
+    const recoveryPlanTitle = root.querySelector<HTMLInputElement>('#recovery-plan-title');
+    const recoveryPlanTitleSave = root.querySelector<HTMLButtonElement>('#recovery-plan-title-save');
+    const recoveryPenButtons = root.querySelectorAll<HTMLButtonElement>('[data-recovery-pen]');
+    const recoveryViewButtons = root.querySelectorAll<HTMLButtonElement>('[data-recovery-view]');
+    const recoveryRangeButtons = root.querySelectorAll<HTMLButtonElement>('[data-recovery-range]');
+    const recoveryTrendLossDate = root.querySelector<HTMLElement>('#recovery-trend-loss-date');
+    const recoveryTrendRecoveryDate = root.querySelector<HTMLElement>('#recovery-trend-recovery-date');
+    const recoveryLossTitle = root.querySelector<HTMLElement>('#recovery-loss-title');
+    const recoveryRecoveryTitle = root.querySelector<HTMLElement>('#recovery-recovery-title');
+    const recoveryCompareLoss = root.querySelector<HTMLDivElement>('#recovery-compare-loss');
+    const recoveryCompareRecovery = root.querySelector<HTMLDivElement>('#recovery-compare-recovery');
     const recoveryModal = root.querySelector<HTMLDivElement>('#recovery-modal');
     const recoveryModalTitle = root.querySelector<HTMLElement>('#recovery-modal-title');
     const recoveryModalClose = root.querySelector<HTMLButtonElement>('#recovery-modal-close');
     const recoveryCancel = root.querySelector<HTMLButtonElement>('#recovery-cancel');
     const recoverySave = root.querySelector<HTMLButtonElement>('#recovery-save');
+    const recoveryPlanName = root.querySelector<HTMLInputElement>('#recovery-plan-name');
     const recoveryLegTrade = root.querySelector<HTMLSelectElement>('#recovery-leg-trade');
     const recoveryLegAdd = root.querySelector<HTMLButtonElement>('#recovery-leg-add');
     const recoveryLegAddManual = root.querySelector<HTMLButtonElement>('#recovery-leg-add-manual');
@@ -1425,6 +1670,26 @@ export function renderTradesView(root: HTMLElement): void {
     const recoveryLossTrade = root.querySelector<HTMLSelectElement>('#recovery-loss-trade');
     const recoveryLossAdd = root.querySelector<HTMLButtonElement>('#recovery-loss-add');
     const recoveryLossBody = root.querySelector<HTMLTableSectionElement>('#recovery-loss-body');
+    const reentryCandidateCount = root.querySelector<HTMLElement>('#reentry-candidate-count');
+    const reentryCandidatesBody = root.querySelector<HTMLTableSectionElement>('#reentry-candidates-body');
+    const reentryCount = root.querySelector<HTMLElement>('#reentry-count');
+    const reentryBody = root.querySelector<HTMLTableSectionElement>('#reentry-body');
+    const reentryDetailTitle = root.querySelector<HTMLElement>('#reentry-detail-title');
+    const reentryDetailBody = root.querySelector<HTMLDivElement>('#reentry-detail-body');
+    const reentryModal = root.querySelector<HTMLDivElement>('#reentry-modal');
+    const reentryModalTitle = root.querySelector<HTMLElement>('#reentry-modal-title');
+    const reentryModalClose = root.querySelector<HTMLButtonElement>('#reentry-modal-close');
+    const reentryCancel = root.querySelector<HTMLButtonElement>('#reentry-cancel');
+    const reentrySave = root.querySelector<HTMLButtonElement>('#reentry-save');
+    const reentryPlanName = root.querySelector<HTMLInputElement>('#reentry-plan-name');
+    const reentrySellMeta = root.querySelector<HTMLElement>('#reentry-sell-meta');
+    const reentryLossAmount = root.querySelector<HTMLElement>('#reentry-loss-amount');
+    const reentrySellQty = root.querySelector<HTMLElement>('#reentry-sell-qty');
+    const reentryBuyTrade = root.querySelector<HTMLSelectElement>('#reentry-buy-trade');
+    const reentryBuyAdd = root.querySelector<HTMLButtonElement>('#reentry-buy-add');
+    const reentryBuyAddManual = root.querySelector<HTMLButtonElement>('#reentry-buy-add-manual');
+    const reentryBuysBody = root.querySelector<HTMLTableSectionElement>('#reentry-buys-body');
+    const reentryNotes = root.querySelector<HTMLInputElement>('#reentry-notes');
     const mappingReviewModal = root.querySelector<HTMLDivElement>('#mapping-review-modal');
     const mappingReviewClose = root.querySelector<HTMLButtonElement>('#mapping-review-close');
     const mappingReviewCancel = root.querySelector<HTMLButtonElement>('#mapping-review-cancel');
@@ -1492,13 +1757,25 @@ export function renderTradesView(root: HTMLElement): void {
       !recoveryNet ||
       !recoveryCount ||
       !recoveryBody ||
-      !recoveryDetail ||
-      !recoveryDetailTitle ||
+      !recoveryTrendCanvas ||
+      !recoveryTrendEmpty ||
+      !recoveryPlanTitle ||
+      !recoveryPlanTitleSave ||
+      !recoveryPenButtons.length ||
+      !recoveryViewButtons.length ||
+      !recoveryRangeButtons.length ||
+      !recoveryTrendLossDate ||
+      !recoveryTrendRecoveryDate ||
+      !recoveryLossTitle ||
+      !recoveryRecoveryTitle ||
+      !recoveryCompareLoss ||
+      !recoveryCompareRecovery ||
       !recoveryModal ||
       !recoveryModalTitle ||
       !recoveryModalClose ||
       !recoveryCancel ||
       !recoverySave ||
+      !recoveryPlanName ||
       !recoveryLegTrade ||
       !recoveryLegAdd ||
       !recoveryLegAddManual ||
@@ -1510,6 +1787,26 @@ export function renderTradesView(root: HTMLElement): void {
       !recoveryLossTrade ||
       !recoveryLossAdd ||
       !recoveryLossBody ||
+      !reentryCandidateCount ||
+      !reentryCandidatesBody ||
+      !reentryCount ||
+      !reentryBody ||
+      !reentryDetailTitle ||
+      !reentryDetailBody ||
+      !reentryModal ||
+      !reentryModalTitle ||
+      !reentryModalClose ||
+      !reentryCancel ||
+      !reentrySave ||
+      !reentryPlanName ||
+      !reentrySellMeta ||
+      !reentryLossAmount ||
+      !reentrySellQty ||
+      !reentryBuyTrade ||
+      !reentryBuyAdd ||
+      !reentryBuyAddManual ||
+      !reentryBuysBody ||
+      !reentryNotes ||
       !mappingReviewModal ||
       !mappingReviewClose ||
       !mappingReviewCancel ||
@@ -1531,7 +1828,18 @@ export function renderTradesView(root: HTMLElement): void {
     let recoveryPlans: RecoveryPlan[] = [];
     let recoveryRows: RecoveryPlanSummary[] = [];
     let linkedLossTradeIds = new Set<string>();
+    let reentryPlans: ReentryPlan[] = [];
+    let reentryRows: ReentryPlanSummary[] = [];
+    let linkedReentrySellIds = new Set<string>();
+    let recoveryTrendChart: ChartJS | null = null;
+    let recoveryRange: '7d' | '1m' | '3m' | '6m' | 'all' = 'all';
+    let recoveryView: 'index' | 'return' | 'ltp' = loadRecoveryViewState();
+    let recoveryPenState: Record<'lossTarget' | 'recovered' | 'breakEven' | 'tradeALtp' | 'tradeBLtp', boolean> =
+      loadRecoveryPenState();
+    let priceHistoryCache = new Map<string, PriceHistoryPoint[]>();
+    let trendRequestId = 0;
     let activeRecoveryPlanId: string | null = null;
+    let activeReentryPlanId: string | null = null;
     let importConfidence = loadImportConfidence();
     let userSettings = await getUserSettings(session.userId);
     let recoveryDraft: {
@@ -1539,6 +1847,12 @@ export function renderTradesView(root: HTMLElement): void {
       lossTrades: RecoveryLossLeg[];
       legs: RecoveryLeg[];
     } = { legs: [], lossTrades: [] };
+    let reentryDraft: {
+      planId?: string;
+      sellTrade?: TradeRecord;
+      lossAmount?: number;
+      buybacks: ReentryBuyLeg[];
+    } = { buybacks: [] };
     let recoveryDraftLossAmount = 0;
     let recoveryDraftHoldDays: number | null = null;
     let tickerSort: { key: 'ticker' | 'ltp' | 'chg' | 'last'; dir: 'asc' | 'desc' } = {
@@ -1987,6 +2301,123 @@ export function renderTradesView(root: HTMLElement): void {
         };
       });
 
+    const getRecoveryPlanLabel = (plan: RecoveryPlan, lossTrades: RecoveryLossLeg[]): string => {
+      const trimmed = plan.name ? plan.name.trim() : '';
+      if (trimmed) return trimmed;
+      if (lossTrades.length) {
+        return lossTrades.length === 1
+          ? lossTrades[0].symbol
+          : `${lossTrades[0].symbol} +${lossTrades.length - 1}`;
+      }
+      return plan.lossSymbol || 'Recovery plan';
+    };
+
+    const buildLinkedReentrySellIds = (plans: ReentryPlan[]): Set<string> => {
+      const ids = new Set<string>();
+      plans.forEach((plan) => {
+        if (plan.sellTradeId) {
+          ids.add(plan.sellTradeId);
+        }
+      });
+      return ids;
+    };
+
+    const buildReentrySummaries = (plans: ReentryPlan[], targetPct: number): ReentryPlanSummary[] =>
+      plans.map((plan) => {
+        const buybackQty = plan.buybackTrades.reduce((sum, leg) => sum + leg.quantity, 0);
+        const buybackInvested = plan.buybackTrades.reduce(
+          (sum, leg) => sum + (leg.investedAmount || leg.quantity * leg.buyPrice),
+          0
+        );
+        const buybackAvg = buybackQty > 0 ? buybackInvested / buybackQty : null;
+        const lossPerShare = plan.sellQuantity > 0 ? plan.lossAmount / plan.sellQuantity : null;
+        const allocatedLoss = lossPerShare !== null ? lossPerShare * buybackQty : 0;
+        const reentryGain = buybackAvg !== null ? (plan.sellPrice - buybackAvg) * buybackQty : 0;
+        const remainingLoss = Math.max(0, allocatedLoss - reentryGain);
+        const breakEvenLtp = buybackAvg !== null && lossPerShare !== null ? buybackAvg + lossPerShare : null;
+        const targetLtp =
+          buybackAvg !== null && lossPerShare !== null
+            ? buybackAvg + lossPerShare + (plan.sellPrice * (targetPct || 0)) / 100
+            : null;
+        return {
+          ...plan,
+          buybackQty,
+          buybackInvested,
+          buybackAvg,
+          lossPerShare,
+          allocatedLoss,
+          reentryGain,
+          remainingLoss,
+          breakEvenLtp,
+          targetLtp
+        };
+      });
+
+    const getReentryPlanLabel = (plan: ReentryPlan): string => {
+      const trimmed = plan.name ? plan.name.trim() : '';
+      if (trimmed) return trimmed;
+      return plan.symbol ? `${plan.symbol} Re-entry` : 'Re-entry plan';
+    };
+
+    const recoveryRangeOptions: Record<string, { label: string; days: number | null }> = {
+      '7d': { label: '1W', days: 7 },
+      '1m': { label: '1M', days: 30 },
+      '3m': { label: '3M', days: 90 },
+      '6m': { label: '6M', days: 180 },
+      all: { label: 'All', days: null }
+    };
+
+    const RECOVERY_PEN_KEY = 'recovery_trend_pens_v1';
+    const RECOVERY_VIEW_KEY = 'recovery_trend_view_v1';
+
+    function loadRecoveryPenState(): Record<'lossTarget' | 'recovered' | 'breakEven' | 'tradeALtp' | 'tradeBLtp', boolean> {
+      try {
+        const raw = localStorage.getItem(RECOVERY_PEN_KEY);
+        const parsed = raw ? (JSON.parse(raw) as Record<string, boolean>) : null;
+        return {
+          lossTarget: parsed?.lossTarget !== false,
+          recovered: parsed?.recovered !== false,
+          breakEven: parsed?.breakEven !== false,
+          tradeALtp: parsed?.tradeALtp !== false,
+          tradeBLtp: parsed?.tradeBLtp !== false
+        };
+      } catch {
+        return {
+          lossTarget: true,
+          recovered: true,
+          breakEven: true,
+          tradeALtp: true,
+          tradeBLtp: true
+        };
+      }
+    }
+
+    function saveRecoveryPenState(state: typeof recoveryPenState): void {
+      try {
+        localStorage.setItem(RECOVERY_PEN_KEY, JSON.stringify(state));
+      } catch {
+        return;
+      }
+    }
+
+    function loadRecoveryViewState(): 'index' | 'return' | 'ltp' {
+      try {
+        const raw = localStorage.getItem(RECOVERY_VIEW_KEY);
+        if (raw === 'return' || raw === 'ltp' || raw === 'index') return raw;
+        return 'index';
+      } catch {
+        return 'index';
+      }
+    }
+
+    function saveRecoveryViewState(value: typeof recoveryView): void {
+      try {
+        localStorage.setItem(RECOVERY_VIEW_KEY, value);
+      } catch {
+        return;
+      }
+    }
+
     const resolveImportedSymbol = (rawSymbol: string, companyName?: string): ImportSymbolResolution => {
       const normalized = normalizeSymbol(rawSymbol);
       const isNumeric = normalized ? /^\d+$/.test(normalized) : false;
@@ -2420,11 +2851,7 @@ export function renderTradesView(root: HTMLElement): void {
       recoveryBody.innerHTML = rows
         .map((plan) => {
           const lossTrades = plan.lossTrades && plan.lossTrades.length ? plan.lossTrades : normalizeLossTrades(plan);
-          const lossLabel = lossTrades.length
-            ? lossTrades.length === 1
-              ? lossTrades[0].symbol
-              : `${lossTrades[0].symbol} +${lossTrades.length - 1}`
-            : plan.lossSymbol || 'Loss plan';
+          const lossLabel = getRecoveryPlanLabel(plan, lossTrades);
           const statusLabel =
             plan.status === 'CLOSED' ? 'CLOSED' : plan.isRecovered ? 'RECOVERED' : 'ACTIVE';
           const statusBadge =
@@ -2459,20 +2886,661 @@ export function renderTradesView(root: HTMLElement): void {
       recoveryCount.textContent = `${rows.length} plans`;
     };
 
-    const renderRecoveryDetail = (plan: RecoveryPlanSummary | null) => {
-      if (!plan) {
-        recoveryDetailTitle.textContent = 'Select a plan';
-        recoveryDetail.innerHTML = 'Choose a plan to compare Trade A vs Trade B.';
+    const renderReentryCandidates = (rows: Array<{ trade: TradeRecord; lossAmount: number }>) => {
+      if (!rows.length) {
+        reentryCandidatesBody.innerHTML =
+          '<tr><td colspan="4" class="text-muted text-center py-3">No sell losses available.</td></tr>';
+        reentryCandidateCount.textContent = '0 trades';
         return;
       }
+      reentryCandidatesBody.innerHTML = rows
+        .map(({ trade, lossAmount }) => {
+          return `
+            <tr data-sell-id="${trade.id}">
+              <td class="fw-semibold">${trade.symbol}</td>
+              <td>${trade.quantity} @ ${formatMoney(trade.price)}</td>
+              <td class="text-danger">${formatMoney(lossAmount)}</td>
+              <td class="text-end">
+                <button class="btn btn-sm btn-outline-primary" data-action="create-reentry">Create</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+      reentryCandidateCount.textContent = `${rows.length} trades`;
+    };
+
+    const renderReentryRows = (rows: ReentryPlanSummary[]) => {
+      if (!rows.length) {
+        reentryBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No re-entry plans yet.</td></tr>';
+        reentryCount.textContent = '0 plans';
+        return;
+      }
+      reentryBody.innerHTML = rows
+        .map((plan) => {
+          const breakEven = plan.breakEvenLtp !== null ? formatMoney(plan.breakEvenLtp) : '--';
+          return `
+            <tr data-plan-id="${plan.id}">
+              <td class="fw-semibold">${getReentryPlanLabel(plan)}</td>
+              <td>${formatMoney(plan.lossAmount)}</td>
+              <td>${plan.buybackQty}</td>
+              <td>${breakEven}</td>
+              <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-outline-secondary me-2" data-action="view-reentry">View</button>
+                <button class="btn btn-sm btn-outline-primary me-2" data-action="edit-reentry">Edit</button>
+                ${
+                  plan.status === 'ACTIVE'
+                    ? '<button class="btn btn-sm btn-outline-success me-2" data-action="close-reentry">Close</button>'
+                    : ''
+                }
+                <button class="btn btn-sm btn-outline-danger" data-action="delete-reentry">Delete</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+      reentryCount.textContent = `${rows.length} plans`;
+    };
+
+    const renderReentryDetail = (plan: ReentryPlanSummary | null) => {
+      if (!plan) {
+        reentryDetailTitle.textContent = 'Select a plan to see analysis.';
+        reentryDetailBody.innerHTML = 'Select a plan to see analysis.';
+        return;
+      }
+      const buybackAvg = plan.buybackAvg !== null ? formatMoney(plan.buybackAvg) : '--';
+      const breakEven = plan.breakEvenLtp !== null ? formatMoney(plan.breakEvenLtp) : '--';
+      const targetPct = userSettings.targetProfitPct || 0;
+      const targetLtp = plan.targetLtp !== null ? formatMoney(plan.targetLtp) : '--';
+      const gainLabel = plan.reentryGain >= 0 ? formatMoney(plan.reentryGain) : `-${formatMoney(Math.abs(plan.reentryGain))}`;
+      const remainingLabel =
+        plan.remainingLoss > 0 ? `-${formatMoney(Math.abs(plan.remainingLoss))}` : formatMoney(0);
+
+      reentryDetailTitle.textContent = `${getReentryPlanLabel(plan)} • ${plan.symbol}`;
+      reentryDetailBody.innerHTML = `
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Loss Amount</div>
+            <div class="h6 mb-0 text-danger">${formatMoney(plan.lossAmount)}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Buyback Qty</div>
+            <div class="h6 mb-0">${plan.buybackQty}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Avg Buy Price</div>
+            <div class="h6 mb-0">${buybackAvg}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Re-entry Gain</div>
+            <div class="h6 mb-0">${gainLabel}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Remaining Loss</div>
+            <div class="h6 mb-0 text-danger">${remainingLabel}</div>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Break-even LTP</div>
+            <div class="h6 mb-0">${breakEven}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Target LTP (+${targetPct.toFixed(1)}%)</div>
+            <div class="h6 mb-0">${targetLtp}</div>
+          </div>
+        </div>
+        <div class="fw-semibold mb-2">Buyback Legs</div>
+        <div class="d-flex flex-column">
+          ${
+            plan.buybackTrades.length
+              ? plan.buybackTrades
+                  .map((leg) => {
+                    return `
+                    <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                      <div>
+                        <div class="fw-semibold">${leg.quantity} @ ${formatMoney(leg.buyPrice)}</div>
+                        <div class="text-muted small">${formatDate(leg.tradeDate)}</div>
+                      </div>
+                      <div class="text-muted small">Invested ${formatMoney(leg.investedAmount || leg.quantity * leg.buyPrice)}</div>
+                    </div>
+                  `;
+                  })
+                  .join('')
+              : '<div class="text-muted small">No buyback trades linked.</div>'
+          }
+        </div>
+      `;
+    };
+
+    const buildDateSeries = (start: Date, end: Date): string[] => {
+      const dates: string[] = [];
+      const cursor = new Date(start.getTime());
+      cursor.setHours(0, 0, 0, 0);
+      const endDate = new Date(end.getTime());
+      endDate.setHours(0, 0, 0, 0);
+      while (cursor.getTime() <= endDate.getTime()) {
+        dates.push(cursor.toISOString().slice(0, 10));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return dates;
+    };
+
+    const getPlanDateBounds = (plan: RecoveryPlanSummary, lossTrades?: RecoveryLossLeg[]) => {
+      const lossStart = (lossTrades || [])
+        .map((leg) => new Date(leg.tradeDate))
+        .filter((date) => !Number.isNaN(date.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      const start = lossStart || (plan.createdAt ? new Date(plan.createdAt) : new Date());
+      const end = plan.closedAt ? new Date(plan.closedAt) : new Date();
+      if (end.getTime() < start.getTime()) return { start: end, end: start };
+      return { start, end };
+    };
+
+    const getRangeBounds = (plan: RecoveryPlanSummary, lossTrades: RecoveryLossLeg[]) => {
+      const { start, end } = getPlanDateBounds(plan, lossTrades);
+      const rangeDays = recoveryRangeOptions[recoveryRange]?.days ?? null;
+      if (!rangeDays) return { start, end };
+      const rangeStart = new Date(end.getTime());
+      rangeStart.setDate(rangeStart.getDate() - (rangeDays - 1));
+      return { start: rangeStart > start ? rangeStart : start, end };
+    };
+
+    const updateRangeButtons = (plan: RecoveryPlanSummary | null, lossTrades: RecoveryLossLeg[] = []) => {
+      if (!recoveryRangeButtons.length) return;
+      recoveryRangeButtons.forEach((button) => {
+        const key = button.dataset.recoveryRange || 'all';
+        const rangeDays = recoveryRangeOptions[key]?.days ?? null;
+        if (!plan) {
+          button.setAttribute('disabled', 'true');
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+          return;
+        }
+        const { start, end } = getPlanDateBounds(plan, lossTrades);
+        const planDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1);
+        const disabled = rangeDays !== null && planDays < rangeDays;
+        if (disabled) {
+          button.setAttribute('disabled', 'true');
+          if (recoveryRange === key) {
+            recoveryRange = 'all';
+          }
+        } else {
+          button.removeAttribute('disabled');
+        }
+        if (recoveryRange === key) {
+          button.classList.add('btn-primary');
+          button.classList.remove('btn-outline-secondary');
+        } else {
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+        }
+      });
+    };
+
+    const updatePenButtons = (plan: RecoveryPlanSummary | null) => {
+      const tradeALabel =
+        recoveryView === 'ltp' ? 'Trade A Avg LTP' : recoveryView === 'return' ? 'Trade A Return %' : 'Trade A Index';
+      const tradeBLabel =
+        recoveryView === 'ltp' ? 'Trade B Avg LTP' : recoveryView === 'return' ? 'Trade B Return %' : 'Trade B Index';
+      recoveryPenButtons.forEach((button) => {
+        const key = button.dataset.recoveryPen as keyof typeof recoveryPenState | undefined;
+        if (!key) return;
+        if (key === 'tradeALtp') button.textContent = tradeALabel;
+        if (key === 'tradeBLtp') button.textContent = tradeBLabel;
+        if (!plan) {
+          button.setAttribute('disabled', 'true');
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+          return;
+        }
+        button.removeAttribute('disabled');
+        if (recoveryPenState[key]) {
+          button.classList.add('btn-primary');
+          button.classList.remove('btn-outline-secondary');
+        } else {
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+        }
+      });
+    };
+
+    const updateViewButtons = (plan: RecoveryPlanSummary | null) => {
+      recoveryViewButtons.forEach((button) => {
+        const key = button.dataset.recoveryView as typeof recoveryView | undefined;
+        if (!key) return;
+        if (!plan) {
+          button.setAttribute('disabled', 'true');
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+          return;
+        }
+        button.removeAttribute('disabled');
+        if (recoveryView === key) {
+          button.classList.add('btn-primary');
+          button.classList.remove('btn-outline-secondary');
+        } else {
+          button.classList.remove('btn-primary');
+          button.classList.add('btn-outline-secondary');
+        }
+      });
+    };
+
+    const fetchHistoryWithCache = async (symbol: string, from: string, to: string) => {
+      const key = `${symbol}|${from}|${to}`;
+      if (priceHistoryCache.has(key)) return priceHistoryCache.get(key) || [];
+      const data = await fetchPriceHistory({ ticker: symbol, from, to });
+      priceHistoryCache.set(key, data.points || []);
+      return data.points || [];
+    };
+
+    const renderRecoveryTrend = async (plan: RecoveryPlanSummary | null) => {
+      if (recoveryTrendChart) {
+        recoveryTrendChart.destroy();
+        recoveryTrendChart = null;
+      }
+
+      if (!plan) {
+        recoveryTrendCanvas.classList.add('d-none');
+        recoveryTrendEmpty.classList.remove('d-none');
+        return;
+      }
+
       const lossTrades = plan.lossTrades && plan.lossTrades.length ? plan.lossTrades : normalizeLossTrades(plan);
-      const lossLabel = lossTrades.length
-        ? lossTrades.length === 1
-          ? lossTrades[0].symbol
-          : `${lossTrades[0].symbol} +${lossTrades.length - 1}`
-        : plan.lossSymbol || 'Loss plan';
-      recoveryDetailTitle.textContent = `${lossLabel} plan`;
-      const legs = plan.legs
+      updateRangeButtons(plan, lossTrades);
+      updatePenButtons(plan);
+      updateViewButtons(plan);
+      const { start, end } = getRangeBounds(plan, lossTrades);
+      const labels = buildDateSeries(start, end);
+
+      const sortedLegs = plan.legs
+        .map((leg) => {
+          const trade = leg.tradeId ? trades.find((item) => item.id === leg.tradeId) : undefined;
+          const tradeDate = trade?.tradeDate || leg.createdAt || plan.createdAt;
+          return { ...leg, tradeDate };
+        })
+        .sort((a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime());
+      const recoveryStartDate = sortedLegs.length ? new Date(sortedLegs[0].tradeDate) : null;
+      const recoveryStartIndex = recoveryStartDate
+        ? labels.findIndex((label) => new Date(label).getTime() >= recoveryStartDate.getTime())
+        : -1;
+
+      const recoveredSeries: number[] = [];
+      const lossSeries: number[] = [];
+      const breakEvenSeries: number[] = [];
+
+      let cumulative = 0;
+      let legIndex = 0;
+      labels.forEach((label) => {
+        const labelDate = new Date(label).getTime();
+        while (legIndex < sortedLegs.length) {
+          const legDate = new Date(sortedLegs[legIndex].tradeDate).getTime();
+          if (legDate <= labelDate) {
+            cumulative += sortedLegs[legIndex].pnl || 0;
+            legIndex += 1;
+          } else {
+            break;
+          }
+        }
+        recoveredSeries.push(cumulative);
+        lossSeries.push(plan.lossAmount);
+        breakEvenSeries.push(0);
+      });
+
+      const requestId = (trendRequestId += 1);
+      recoveryTrendEmpty.textContent = 'Loading trend...';
+      recoveryTrendCanvas.classList.add('d-none');
+      recoveryTrendEmpty.classList.remove('d-none');
+
+      const lossBuckets = recoveryPenState.tradeALtp
+        ? lossTrades.reduce<Record<string, number>>((map, leg) => {
+            map[leg.symbol] = (map[leg.symbol] || 0) + leg.quantity;
+            return map;
+          }, {})
+        : {};
+      const lossSymbols = Object.keys(lossBuckets);
+
+      const recoveryBuckets = recoveryPenState.tradeBLtp
+        ? plan.legs.reduce<Record<string, number>>((map, leg) => {
+            map[leg.symbol] = (map[leg.symbol] || 0) + leg.quantity;
+            return map;
+          }, {})
+        : {};
+      const recoverySymbols = Object.keys(recoveryBuckets);
+
+      const lossHistorySeries = new Map<string, { sum: number; weight: number }>();
+      const recoveryHistorySeries = new Map<string, { sum: number; weight: number }>();
+      if (lossSymbols.length || recoverySymbols.length) {
+        const from = labels[0];
+        const to = labels[labels.length - 1];
+        await Promise.all([
+          ...lossSymbols.map(async (symbol) => {
+            try {
+              const points = await fetchHistoryWithCache(symbol, from, to);
+              points.forEach((point) => {
+                const entry = lossHistorySeries.get(point.date) || { sum: 0, weight: 0 };
+                const weight = lossBuckets[symbol] || 1;
+                entry.sum += point.close * weight;
+                entry.weight += weight;
+                lossHistorySeries.set(point.date, entry);
+              });
+            } catch (error) {
+              return;
+            }
+          }),
+          ...recoverySymbols.map(async (symbol) => {
+            try {
+              const points = await fetchHistoryWithCache(symbol, from, to);
+              points.forEach((point) => {
+                const entry = recoveryHistorySeries.get(point.date) || { sum: 0, weight: 0 };
+                const weight = recoveryBuckets[symbol] || 1;
+                entry.sum += point.close * weight;
+                entry.weight += weight;
+                recoveryHistorySeries.set(point.date, entry);
+              });
+            } catch (error) {
+              return;
+            }
+          })
+        ]);
+      }
+
+      if (requestId !== trendRequestId) return;
+
+      const lossValueSeries: Array<number | null> = labels.map((date) => {
+        const entry = lossHistorySeries.get(date);
+        if (!entry || !(entry.weight > 0)) return null;
+        return entry.sum;
+      });
+
+      const recoveryValueSeries: Array<number | null> = labels.map((date) => {
+        const entry = recoveryHistorySeries.get(date);
+        if (!entry || !(entry.weight > 0)) return null;
+        return entry.sum;
+      });
+
+      const avgLtpSeries: Array<number | null> = labels.map((date) => {
+        const entry = lossHistorySeries.get(date);
+        if (!entry || !(entry.weight > 0)) return null;
+        return entry.sum / entry.weight;
+      });
+
+      const avgRecoveryLtpSeries: Array<number | null> = labels.map((date) => {
+        const entry = recoveryHistorySeries.get(date);
+        if (!entry || !(entry.weight > 0)) return null;
+        return entry.sum / entry.weight;
+      });
+
+      const lossInvested = lossTrades.reduce((sum, leg) => sum + leg.sellPrice * leg.quantity, 0);
+      const recoveryInvested = plan.legs.reduce(
+        (sum, leg) => sum + (leg.investedAmount || leg.quantity * leg.buyPrice),
+        0
+      );
+
+      const tradeAIndexSeries: Array<number | null> = lossValueSeries.map((value) => {
+        if (value === null || !(lossInvested > 0)) return null;
+        return (value / lossInvested) * 100;
+      });
+
+      const tradeBIndexSeries: Array<number | null> = recoveryValueSeries.map((value) => {
+        if (value === null || !(recoveryInvested > 0)) return null;
+        return (value / recoveryInvested) * 100;
+      });
+
+      const tradeAReturnSeries: Array<number | null> = lossValueSeries.map((value) => {
+        if (value === null || !(lossInvested > 0)) return null;
+        return ((value - lossInvested) / lossInvested) * 100;
+      });
+
+      const tradeBReturnSeries: Array<number | null> = recoveryValueSeries.map((value) => {
+        if (value === null || !(recoveryInvested > 0)) return null;
+        return ((value - recoveryInvested) / recoveryInvested) * 100;
+      });
+
+      const tradeALine =
+        recoveryView === 'ltp' ? avgLtpSeries : recoveryView === 'return' ? tradeAReturnSeries : tradeAIndexSeries;
+      const tradeBLine =
+        recoveryView === 'ltp'
+          ? avgRecoveryLtpSeries
+          : recoveryView === 'return'
+            ? tradeBReturnSeries
+            : tradeBIndexSeries;
+
+      const tradeALabel =
+        recoveryView === 'ltp' ? 'Trade A Avg LTP' : recoveryView === 'return' ? 'Trade A Return %' : 'Trade A Index';
+      const tradeBLabel =
+        recoveryView === 'ltp' ? 'Trade B Avg LTP' : recoveryView === 'return' ? 'Trade B Return %' : 'Trade B Index';
+
+      recoveryTrendCanvas.classList.remove('d-none');
+      recoveryTrendEmpty.classList.add('d-none');
+
+      const config: ChartConfiguration<'line', (number | null)[], string> = {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            recoveryPenState.lossTarget
+              ? {
+                  label: 'Loss Target',
+                  data: lossSeries,
+                  borderColor: '#f97316',
+                  backgroundColor: 'rgba(249, 115, 22, 0.08)',
+                  borderWidth: 2,
+                  tension: 0.25,
+                  fill: false,
+                  pointRadius: 0
+                }
+              : null,
+            recoveryPenState.recovered
+              ? {
+                  label: 'Recovered',
+                  data: recoveredSeries,
+                  borderColor: '#22c55e',
+                  backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                  borderWidth: 2,
+                  tension: 0.25,
+                  fill: false,
+                  pointRadius: 0,
+                  stepped: true,
+                  segment: {
+                    borderColor: (ctx) => {
+                      if (recoveryStartIndex === -1) return '#22c55e';
+                      return ctx.p0DataIndex < recoveryStartIndex ? '#94a3b8' : '#22c55e';
+                    },
+                    borderDash: (ctx) => {
+                      if (recoveryStartIndex === -1) return [];
+                      return ctx.p0DataIndex < recoveryStartIndex ? [4, 4] : [];
+                    }
+                  }
+                }
+              : null,
+            recoveryPenState.breakEven
+              ? {
+                  label: 'Break-even',
+                  data: breakEvenSeries,
+                  borderColor: '#94a3b8',
+                  borderDash: [6, 6],
+                  borderWidth: 1,
+                  tension: 0,
+                  fill: false,
+                  pointRadius: 0
+                }
+              : null,
+            recoveryPenState.tradeALtp
+              ? {
+                  label: tradeALabel,
+                  data: tradeALine,
+                  borderColor: '#3b82f6',
+                  backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                  borderWidth: 2,
+                  tension: 0.3,
+                  fill: false,
+                  pointRadius: 0,
+                  spanGaps: true,
+                  yAxisID: 'y1'
+                }
+              : null,
+            recoveryPenState.tradeBLtp
+              ? {
+                  label: tradeBLabel,
+                  data: tradeBLine,
+                  borderColor: '#a855f7',
+                  backgroundColor: 'rgba(168, 85, 247, 0.08)',
+                  borderWidth: 2,
+                  tension: 0.3,
+                  fill: false,
+                  pointRadius: 0,
+                  spanGaps: true,
+                  yAxisID: 'y1'
+                }
+              : null
+          ].filter((dataset): dataset is Exclude<typeof dataset, null> => Boolean(dataset))
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'bottom'
+            },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const value = Number(context.parsed.y || 0);
+                  if (context.dataset.yAxisID === 'y1') {
+                    if (recoveryView === 'ltp') {
+                      return `${context.dataset.label}: ${formatMoney(value)}`;
+                    }
+                    if (recoveryView === 'return') {
+                      return `${context.dataset.label}: ${formatPct(value)}`;
+                    }
+                    return `${context.dataset.label}: ${value.toFixed(1)}`;
+                  }
+                  return `${context.dataset.label}: ${formatMoney(value)}`;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              ticks: {
+                callback: (value) => formatMoney(Number(value))
+              }
+            },
+            y1: {
+              position: 'right',
+              grid: {
+                drawOnChartArea: false
+              },
+              ticks: {
+                callback: (value) => {
+                  const numeric = Number(value);
+                  if (recoveryView === 'ltp') return formatMoney(numeric);
+                  if (recoveryView === 'return') return formatPct(numeric);
+                  return numeric.toFixed(1);
+                }
+              }
+            }
+          }
+        }
+      };
+
+      recoveryTrendChart = new Chart(recoveryTrendCanvas, config);
+    };
+
+    const renderRecoveryDetail = (plan: RecoveryPlanSummary | null) => {
+      if (!plan) {
+        recoveryPlanTitle.value = '';
+        recoveryPlanTitle.setAttribute('disabled', 'true');
+        recoveryPlanTitleSave.setAttribute('disabled', 'true');
+        recoveryTrendLossDate.textContent = 'Loss sold: --';
+        recoveryTrendRecoveryDate.textContent = 'Recovery start: --';
+        recoveryLossTitle.textContent = '--';
+        recoveryRecoveryTitle.textContent = '--';
+        recoveryCompareLoss.innerHTML = 'Select a plan to see loss details.';
+        recoveryCompareRecovery.innerHTML = 'Select a plan to see recovery details.';
+        updateRangeButtons(null);
+        updatePenButtons(null);
+        updateViewButtons(null);
+        void renderRecoveryTrend(null);
+        return;
+      }
+
+      const lossTrades = plan.lossTrades && plan.lossTrades.length ? plan.lossTrades : normalizeLossTrades(plan);
+      const planLabel = getRecoveryPlanLabel(plan, lossTrades);
+      const avgHold =
+        lossTrades.length && lossTrades.some((leg) => (leg.holdDays ?? null) !== null)
+          ? lossTrades.reduce((sum, leg) => sum + (leg.holdDays || 0), 0) / lossTrades.length
+          : null;
+      const lossStartDate = lossTrades
+        .map((leg) => new Date(leg.tradeDate))
+        .filter((date) => !Number.isNaN(date.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      const recoveryStart = plan.legs
+        .map((leg) => {
+          const trade = leg.tradeId ? trades.find((item) => item.id === leg.tradeId) : undefined;
+          return new Date(trade?.tradeDate || leg.createdAt || plan.createdAt);
+        })
+        .filter((date) => !Number.isNaN(date.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+
+      recoveryPlanTitle.value = planLabel;
+      recoveryPlanTitle.removeAttribute('disabled');
+      recoveryPlanTitleSave.removeAttribute('disabled');
+      recoveryTrendLossDate.textContent = `Loss sold: ${lossStartDate ? formatDate(lossStartDate.toISOString()) : '--'}`;
+      recoveryTrendRecoveryDate.textContent = `Recovery start: ${
+        recoveryStart ? formatDate(recoveryStart.toISOString()) : '--'
+      }`;
+      updatePenButtons(plan);
+      updateViewButtons(plan);
+      recoveryLossTitle.textContent = `${lossTrades.length} trades`;
+      recoveryRecoveryTitle.textContent = `${plan.legs.length} trades`;
+
+      const recoveredLabel =
+        plan.recoveredAmount >= 0 ? formatMoney(plan.recoveredAmount) : `-${formatMoney(Math.abs(plan.recoveredAmount))}`;
+      const remainingLabel = formatMoney(Math.max(0, plan.remainingAmount));
+      const recoveryPctLabel = plan.recoveryPct !== null ? `${plan.recoveryPct.toFixed(1)}%` : '--';
+
+      const lossItems = lossTrades
+        .map((leg) => {
+          return `
+            <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+              <div>
+                <div class="fw-semibold">${leg.symbol}</div>
+                <div class="text-muted small">Sold ${leg.quantity} @ ${formatMoney(leg.sellPrice)}</div>
+              </div>
+              <div class="text-end">
+                <div class="small text-muted">${formatDate(leg.tradeDate)}</div>
+                <div class="fw-semibold text-danger">${formatMoney(leg.lossAmount)}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+
+      recoveryCompareLoss.innerHTML = `
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Total Loss</div>
+            <div class="h6 mb-0 text-danger">${formatMoney(plan.lossAmount)}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Avg Hold Days</div>
+            <div class="h6 mb-0">${avgHold !== null ? avgHold.toFixed(0) : '--'}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Loss Trades</div>
+            <div class="h6 mb-0">${lossTrades.length}</div>
+          </div>
+        </div>
+        <div class="d-flex flex-column">${lossItems || '<div class="text-muted small">No loss trades linked.</div>'}</div>
+      `;
+
+      const recoveryItems = plan.legs
         .map((leg) => {
           const livePrice = leg.livePrice ?? null;
           const pnl = leg.pnl ?? 0;
@@ -2491,38 +3559,26 @@ export function renderTradesView(root: HTMLElement): void {
           `;
         })
         .join('');
-      const recoveredLabel =
-        plan.recoveredAmount >= 0 ? formatMoney(plan.recoveredAmount) : `-${formatMoney(Math.abs(plan.recoveredAmount))}`;
-      const lossItems = lossTrades
-        .map((leg) => {
-          return `
-            <div class="d-flex justify-content-between align-items-center border-bottom py-2">
-              <div>
-                <div class="fw-semibold">${leg.symbol}</div>
-                <div class="text-muted small">Sold ${leg.quantity} @ ${formatMoney(leg.sellPrice)}</div>
-              </div>
-              <div class="text-end">
-                <div class="small text-muted">${formatDate(leg.tradeDate)}</div>
-                <div class="fw-semibold text-danger">${formatMoney(leg.lossAmount)}</div>
-              </div>
-            </div>
-          `;
-        })
-        .join('');
-      recoveryDetail.innerHTML = `
-        <div class="mb-3">
-          <div class="fw-semibold mb-2">Trade A (Loss)</div>
-          <div class="d-flex flex-column">${lossItems || '<div class="text-muted small">No loss trades linked.</div>'}</div>
+
+      recoveryCompareRecovery.innerHTML = `
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Recovered</div>
+            <div class="h6 mb-0">${recoveredLabel}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Remaining</div>
+            <div class="h6 mb-0">${remainingLabel}</div>
+          </div>
+          <div class="kpi-card flex-grow-1">
+            <div class="text-muted small">Recovery %</div>
+            <div class="h6 mb-0">${recoveryPctLabel}</div>
+          </div>
         </div>
-        <div class="mb-3">
-          <div class="fw-semibold mb-1">Trade B (Recovery)</div>
-          <div class="small text-muted">Recovered: ${recoveredLabel}</div>
-          <div class="small text-muted">Remaining loss: ${formatMoney(Math.max(0, plan.remainingAmount))}</div>
-          <div class="small text-muted">Recovery %: ${plan.recoveryPct !== null ? plan.recoveryPct.toFixed(1) + '%' : '--'}</div>
-        </div>
-        <div class="fw-semibold mb-2">Recovery Trades</div>
-        <div class="d-flex flex-column">${legs || '<div class="text-muted small">No recovery trades added.</div>'}</div>
+        <div class="d-flex flex-column">${recoveryItems || '<div class="text-muted small">No recovery trades added.</div>'}</div>
       `;
+
+      void renderRecoveryTrend(plan);
     };
 
     const updateRecoveryKpis = (rows: RecoveryPlanSummary[]) => {
@@ -2660,6 +3716,12 @@ export function renderTradesView(root: HTMLElement): void {
         ? `Linked loss trades: ${normalizedLossTrades.length}`
         : `Sold at ${formatMoney(lossTrade.price)} on ${formatDate(lossTrade.tradeDate)}`;
       recoveryNotes.value = plan?.notes ?? '';
+      const defaultPlanName = normalizedLossTrades.length
+        ? normalizedLossTrades.length === 1
+          ? normalizedLossTrades[0].symbol
+          : `${normalizedLossTrades[0].symbol} +${normalizedLossTrades.length - 1}`
+        : 'Recovery plan';
+      recoveryPlanName.value = plan?.name ?? defaultPlanName;
 
       refreshLossTradeOptions();
 
@@ -2682,6 +3744,110 @@ export function renderTradesView(root: HTMLElement): void {
       recoveryModal.classList.remove('show');
       recoveryModal.setAttribute('aria-hidden', 'true');
       recoveryDraft = { legs: [], lossTrades: [] };
+      recoveryPlanName.value = '';
+    };
+
+    const getSellTradeForReentryPlan = (plan: ReentryPlan): TradeRecord => {
+      const existing = plan.sellTradeId ? trades.find((trade) => trade.id === plan.sellTradeId) : undefined;
+      if (existing) return existing;
+      return {
+        id: plan.sellTradeId || crypto.randomUUID(),
+        userId: session.userId,
+        symbol: plan.symbol,
+        side: 'SELL',
+        quantity: plan.sellQuantity,
+        price: plan.sellPrice,
+        tradeDate: plan.sellTradeDate,
+        notes: '',
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt
+      };
+    };
+
+    const renderReentryBuys = () => {
+      if (!reentryDraft.buybacks.length) {
+        reentryBuysBody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">No buyback trades added.</td></tr>';
+        return;
+      }
+      reentryBuysBody.innerHTML = reentryDraft.buybacks
+        .map((leg) => {
+          return `
+            <tr data-leg-id="${leg.id}">
+              <td><input class="form-control form-control-sm" data-field="quantity" type="number" min="1" step="1" value="${leg.quantity || ''}" /></td>
+              <td><input class="form-control form-control-sm" data-field="buyPrice" type="number" min="0" step="0.01" value="${leg.buyPrice || ''}" /></td>
+              <td><input class="form-control form-control-sm" data-field="tradeDate" type="date" value="${leg.tradeDate || ''}" /></td>
+              <td class="text-end">
+                <button class="btn btn-sm btn-outline-danger" data-action="remove-buy">Remove</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+    };
+
+    const refreshReentryBuyOptions = () => {
+      if (!reentryDraft.sellTrade) {
+        reentryBuyTrade.innerHTML = '<option value="">Add from BUY trade...</option>';
+        return;
+      }
+      const sellTrade = reentryDraft.sellTrade;
+      const usedIds = new Set(reentryDraft.buybacks.map((leg) => leg.tradeId).filter(Boolean));
+      const buyTrades = trades
+        .filter(
+          (trade) =>
+            trade.side === 'BUY' &&
+            normalizeSymbol(trade.symbol) === normalizeSymbol(sellTrade.symbol) &&
+            trade.tradeDate >= sellTrade.tradeDate
+        )
+        .filter((trade) => !usedIds.has(trade.id));
+      reentryBuyTrade.innerHTML =
+        '<option value="">Add from BUY trade...</option>' +
+        buyTrades
+          .map((trade) => {
+            return `<option value="${trade.id}">${trade.symbol} • ${trade.quantity} @ ${formatMoney(trade.price)} (${formatDate(trade.tradeDate)})</option>`;
+          })
+          .join('');
+    };
+
+    const openReentryModal = (sellTrade: TradeRecord | null, plan?: ReentryPlan) => {
+      if (!plan && !sellTrade) {
+        showAlert(feedback, 'warning', 'Select a loss trade first.');
+        return;
+      }
+      const selectedTrade = plan ? getSellTradeForReentryPlan(plan) : sellTrade!;
+      const snapshot = plan ? { lossAmount: plan.lossAmount } : computeLossSnapshot(selectedTrade);
+      if (!plan && snapshot.lossAmount <= 0) {
+        showAlert(feedback, 'warning', 'This sell trade does not have a loss to analyze.');
+        return;
+      }
+      const defaultName = `${selectedTrade.symbol} Re-entry`;
+      reentryDraft = {
+        planId: plan?.id,
+        sellTrade: selectedTrade,
+        lossAmount: plan?.lossAmount ?? snapshot.lossAmount,
+        buybacks: plan?.buybackTrades ? plan.buybackTrades.map((leg) => ({ ...leg })) : []
+      };
+      reentryModalTitle.textContent = plan ? 'Edit Re-entry Plan' : 'Create Re-entry Plan';
+      reentryPlanName.value = plan?.name ?? defaultName;
+      reentryNotes.value = plan?.notes ?? '';
+      reentrySellMeta.textContent = `${selectedTrade.symbol} • Sold ${selectedTrade.quantity} @ ${formatMoney(
+        selectedTrade.price
+      )} on ${formatDate(selectedTrade.tradeDate)}`;
+      reentryLossAmount.textContent = formatMoney(reentryDraft.lossAmount || 0);
+      reentrySellQty.textContent = String(selectedTrade.quantity || 0);
+
+      refreshReentryBuyOptions();
+      renderReentryBuys();
+      reentryModal.classList.add('show');
+      reentryModal.setAttribute('aria-hidden', 'false');
+    };
+
+    const closeReentryModal = () => {
+      reentryModal.classList.remove('show');
+      reentryModal.setAttribute('aria-hidden', 'true');
+      reentryDraft = { buybacks: [] };
+      reentryPlanName.value = '';
+      reentryNotes.value = '';
     };
 
     let mappingReviewResolver: ((value: { expected: string; note: string } | null) => void) | null = null;
@@ -2858,12 +4024,14 @@ export function renderTradesView(root: HTMLElement): void {
         updatedAt: now
       }));
       const primaryLoss = normalizedLossTrades[0];
+      const planName = recoveryPlanName.value.trim();
       const plan: RecoveryPlan = {
         id: recoveryDraft.planId || crypto.randomUUID(),
         userId: session.userId,
         status: recoveryDraft.planId
           ? recoveryPlans.find((item) => item.id === recoveryDraft.planId)?.status || 'ACTIVE'
           : 'ACTIVE',
+        name: planName || undefined,
         lossTradeId: primaryLoss.tradeId,
         lossSymbol: primaryLoss.symbol,
         lossQuantity: primaryLoss.quantity,
@@ -2891,6 +4059,7 @@ export function renderTradesView(root: HTMLElement): void {
         if (recoveryDraft.planId) {
           const updates: Partial<Omit<RecoveryPlan, 'id' | 'userId' | 'createdAt'>> = {
             status: plan.status,
+            name: plan.name,
             lossTradeId: plan.lossTradeId,
             lossSymbol: plan.lossSymbol,
             lossQuantity: plan.lossQuantity,
@@ -2916,6 +4085,233 @@ export function renderTradesView(root: HTMLElement): void {
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       }
+    });
+
+    reentryModal.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target?.dataset?.close === 'reentry') {
+        closeReentryModal();
+      }
+    });
+    reentryModalClose.addEventListener('click', closeReentryModal);
+    reentryCancel.addEventListener('click', closeReentryModal);
+
+    reentryBuyAdd.addEventListener('click', () => {
+      const tradeId = reentryBuyTrade.value;
+      if (!tradeId) return;
+      const trade = trades.find((item) => item.id === tradeId);
+      if (!trade) return;
+      const now = new Date().toISOString();
+      reentryDraft.buybacks.push({
+        id: crypto.randomUUID(),
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        quantity: trade.quantity,
+        buyPrice: trade.price,
+        tradeDate: trade.tradeDate,
+        investedAmount: trade.quantity * trade.price,
+        createdAt: now,
+        updatedAt: now
+      });
+      renderReentryBuys();
+      refreshReentryBuyOptions();
+      reentryBuyTrade.value = '';
+    });
+
+    reentryBuyAddManual.addEventListener('click', () => {
+      const now = new Date().toISOString();
+      reentryDraft.buybacks.push({
+        id: crypto.randomUUID(),
+        symbol: reentryDraft.sellTrade?.symbol || '',
+        quantity: 1,
+        buyPrice: 0,
+        tradeDate: new Date().toISOString().slice(0, 10),
+        investedAmount: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+      renderReentryBuys();
+    });
+
+    reentryBuysBody.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const button = target.closest<HTMLButtonElement>('[data-action="remove-buy"]');
+      if (!button) return;
+      const row = button.closest<HTMLTableRowElement>('tr[data-leg-id]');
+      if (!row) return;
+      const legId = row.dataset.legId || '';
+      reentryDraft.buybacks = reentryDraft.buybacks.filter((leg) => leg.id !== legId);
+      renderReentryBuys();
+      refreshReentryBuyOptions();
+    });
+
+    reentryBuysBody.addEventListener('input', (event) => {
+      const target = event.target as HTMLInputElement | null;
+      if (!target) return;
+      const row = target.closest<HTMLTableRowElement>('tr[data-leg-id]');
+      if (!row) return;
+      const legId = row.dataset.legId || '';
+      const field = target.dataset.field as 'quantity' | 'buyPrice' | 'tradeDate' | undefined;
+      if (!field) return;
+      const leg = reentryDraft.buybacks.find((item) => item.id === legId);
+      if (!leg) return;
+      if (field === 'quantity') {
+        leg.quantity = Number(target.value || 0);
+      } else if (field === 'buyPrice') {
+        leg.buyPrice = Number(target.value || 0);
+      } else if (field === 'tradeDate') {
+        leg.tradeDate = target.value;
+      }
+      leg.investedAmount = (leg.quantity || 0) * (leg.buyPrice || 0);
+      leg.updatedAt = new Date().toISOString();
+    });
+
+    reentrySave.addEventListener('click', async () => {
+      const sellTrade = reentryDraft.sellTrade;
+      if (!sellTrade) {
+        showAlert(feedback, 'warning', 'Select a sell trade first.');
+        return;
+      }
+      if (!reentryDraft.buybacks.length) {
+        showAlert(feedback, 'warning', 'Add at least one buyback trade.');
+        return;
+      }
+      const invalidLeg = reentryDraft.buybacks.find(
+        (leg) => !(leg.quantity > 0) || !(leg.buyPrice > 0) || !leg.tradeDate
+      );
+      if (invalidLeg) {
+        showAlert(feedback, 'warning', 'Each buyback needs qty, price, and date.');
+        return;
+      }
+      const lossAmount = reentryDraft.lossAmount ?? computeLossSnapshot(sellTrade).lossAmount;
+      if (!(lossAmount > 0)) {
+        showAlert(feedback, 'warning', 'This sell trade does not have a loss to analyze.');
+        return;
+      }
+      const now = new Date().toISOString();
+      const planName = reentryPlanName.value.trim();
+      const buybacks = reentryDraft.buybacks.map((leg) => ({
+        ...leg,
+        symbol: normalizeSymbol(leg.symbol || sellTrade.symbol),
+        investedAmount: leg.investedAmount || leg.quantity * leg.buyPrice,
+        updatedAt: now
+      }));
+      const plan: ReentryPlan = {
+        id: reentryDraft.planId || crypto.randomUUID(),
+        userId: session.userId,
+        status: reentryDraft.planId
+          ? reentryPlans.find((item) => item.id === reentryDraft.planId)?.status || 'ACTIVE'
+          : 'ACTIVE',
+        name: planName || undefined,
+        symbol: normalizeSymbol(sellTrade.symbol),
+        sellTradeId: sellTrade.id,
+        sellQuantity: sellTrade.quantity,
+        sellPrice: sellTrade.price,
+        sellAmount: sellTrade.quantity * sellTrade.price,
+        lossAmount: lossAmount,
+        sellTradeDate: sellTrade.tradeDate,
+        buybackTrades: buybacks,
+        notes: reentryNotes.value.trim() || undefined,
+        createdAt: reentryDraft.planId
+          ? reentryPlans.find((item) => item.id === reentryDraft.planId)?.createdAt || now
+          : now,
+        updatedAt: now,
+        closedAt: reentryDraft.planId
+          ? reentryPlans.find((item) => item.id === reentryDraft.planId)?.closedAt || null
+          : null
+      };
+      try {
+        if (reentryDraft.planId) {
+          await updateReentryPlan(plan.id, session.userId, {
+            name: plan.name,
+            status: plan.status,
+            symbol: plan.symbol,
+            sellTradeId: plan.sellTradeId,
+            sellQuantity: plan.sellQuantity,
+            sellPrice: plan.sellPrice,
+            sellAmount: plan.sellAmount,
+            lossAmount: plan.lossAmount,
+            sellTradeDate: plan.sellTradeDate,
+            buybackTrades: plan.buybackTrades,
+            notes: plan.notes,
+            updatedAt: plan.updatedAt,
+            closedAt: plan.closedAt
+          });
+          showAlert(feedback, 'success', 'Re-entry plan updated.');
+        } else {
+          await addReentryPlan(plan);
+          showAlert(feedback, 'success', 'Re-entry plan created.');
+        }
+        closeReentryModal();
+        await refreshData();
+        await queueAndSync();
+      } catch (error) {
+        showAlert(feedback, 'danger', toErrorMessage(error));
+      }
+    });
+
+    recoveryPlanTitleSave.addEventListener('click', async () => {
+      if (!activeRecoveryPlanId) {
+        showAlert(feedback, 'warning', 'Select a recovery plan first.');
+        return;
+      }
+      const name = recoveryPlanTitle.value.trim();
+      try {
+        await updateRecoveryPlan(activeRecoveryPlanId, session.userId, {
+          name: name || undefined
+        });
+        showAlert(feedback, 'success', 'Plan name updated.');
+        await refreshData();
+        await queueAndSync();
+      } catch (error) {
+        showAlert(feedback, 'danger', toErrorMessage(error));
+      }
+    });
+
+    recoveryRangeButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const range = button.dataset.recoveryRange || 'all';
+        if (range === recoveryRange) return;
+        recoveryRange = range as typeof recoveryRange;
+        const plan =
+          (activeRecoveryPlanId && recoveryRows.find((item) => item.id === activeRecoveryPlanId)) || null;
+        updateRangeButtons(plan, plan?.lossTrades || []);
+        if (plan) {
+          void renderRecoveryTrend(plan);
+        }
+      });
+    });
+
+    recoveryPenButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const key = button.dataset.recoveryPen as keyof typeof recoveryPenState | undefined;
+        if (!key) return;
+        recoveryPenState = { ...recoveryPenState, [key]: !recoveryPenState[key] };
+        saveRecoveryPenState(recoveryPenState);
+        const plan =
+          (activeRecoveryPlanId && recoveryRows.find((item) => item.id === activeRecoveryPlanId)) || null;
+        updatePenButtons(plan);
+        if (plan) {
+          void renderRecoveryTrend(plan);
+        }
+      });
+    });
+
+    recoveryViewButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const key = button.dataset.recoveryView as typeof recoveryView | undefined;
+        if (!key || key === recoveryView) return;
+        recoveryView = key;
+        saveRecoveryViewState(recoveryView);
+        const plan =
+          (activeRecoveryPlanId && recoveryRows.find((item) => item.id === activeRecoveryPlanId)) || null;
+        updateViewButtons(plan);
+        updatePenButtons(plan);
+        if (plan) {
+          void renderRecoveryTrend(plan);
+        }
+      });
     });
 
     const requestMappingReview = async (symbol: string): Promise<boolean> => {
@@ -2988,6 +4384,31 @@ export function renderTradesView(root: HTMLElement): void {
       renderRecoveryDetail(selected || null);
     };
 
+    const refreshReentryPanels = () => {
+      reentryRows = buildReentrySummaries(reentryPlans, userSettings.targetProfitPct || 0);
+      renderReentryRows(reentryRows);
+      const selected =
+        (activeReentryPlanId && reentryRows.find((plan) => plan.id === activeReentryPlanId)) || reentryRows[0] || null;
+      if (selected) {
+        activeReentryPlanId = selected.id;
+      }
+      renderReentryDetail(selected || null);
+
+      const candidates = trades
+        .filter((trade) => trade.side === 'SELL')
+        .map((trade) => ({ trade, snapshot: computeLossSnapshot(trade) }))
+        .filter(
+          (entry) =>
+            entry.snapshot.lossAmount > 0 && (!entry.trade.id || !linkedReentrySellIds.has(entry.trade.id))
+        )
+        .sort((a, b) => {
+          if (a.trade.tradeDate !== b.trade.tradeDate) return b.trade.tradeDate.localeCompare(a.trade.tradeDate);
+          return b.trade.createdAt.localeCompare(a.trade.createdAt);
+        })
+        .map((entry) => ({ trade: entry.trade, lossAmount: entry.snapshot.lossAmount }));
+      renderReentryCandidates(candidates);
+    };
+
     const applyReviewApprovals = async (list: TradeRecord[], requests: TickerRequest[]) => {
       const applied = loadReviewApplied();
       const updates: Array<Promise<TradeRecord | null>> = [];
@@ -3024,12 +4445,13 @@ export function renderTradesView(root: HTMLElement): void {
     };
 
     const refreshData = async () => {
-      const [list, masterRows, requests, settings, recoveryList] = await Promise.all([
+      const [list, masterRows, requests, settings, recoveryList, reentryList] = await Promise.all([
         listTrades(session.userId),
         listNseMasterForUser(session.userId),
         listTickerRequests(session.userId),
         getUserSettings(session.userId),
-        listRecoveryPlans(session.userId)
+        listRecoveryPlans(session.userId),
+        listReentryPlans(session.userId)
       ]);
       trades = list;
       nseMasterRows = masterRows;
@@ -3038,6 +4460,8 @@ export function renderTradesView(root: HTMLElement): void {
       userSettings = settings;
       recoveryPlans = recoveryList;
       linkedLossTradeIds = buildLinkedLossTradeIds(recoveryPlans);
+      reentryPlans = reentryList;
+      linkedReentrySellIds = buildLinkedReentrySellIds(reentryPlans);
       const reviewChanged = await applyReviewApprovals(trades, tickerRequests);
       importConfidence = loadImportConfidence();
       tickerRequests
@@ -3053,6 +4477,7 @@ export function renderTradesView(root: HTMLElement): void {
       refreshKpis();
       refreshList();
       await refreshTickerPanels();
+      refreshReentryPanels();
       renderSymbolOptions();
       if (reviewChanged) {
         await queueSnapshot(session.userId);
@@ -3279,6 +4704,69 @@ export function renderTradesView(root: HTMLElement): void {
         });
         if (!ok) return;
         await deleteRecoveryPlan(plan.id, session.userId);
+        await refreshData();
+        await queueAndSync();
+      }
+    });
+
+    reentryCandidatesBody.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const actionButton = target.closest<HTMLButtonElement>('[data-action="create-reentry"]');
+      if (!actionButton) return;
+      const row = actionButton.closest<HTMLTableRowElement>('tr[data-sell-id]');
+      if (!row) return;
+      const tradeId = row.dataset.sellId || '';
+      const trade = trades.find((item) => item.id === tradeId) || null;
+      openReentryModal(trade);
+    });
+
+    reentryBody.addEventListener('click', async (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const actionButton = target.closest<HTMLButtonElement>('[data-action]');
+      if (!actionButton) return;
+      const action = actionButton.dataset.action;
+      const row = actionButton.closest<HTMLTableRowElement>('tr[data-plan-id]');
+      if (!row) return;
+      const planId = row.dataset.planId || '';
+      if (!planId) return;
+      const plan = reentryPlans.find((item) => item.id === planId);
+      if (!plan) return;
+
+      if (action === 'view-reentry') {
+        activeReentryPlanId = plan.id;
+        refreshReentryPanels();
+        return;
+      }
+      if (action === 'edit-reentry') {
+        openReentryModal(null, plan);
+        return;
+      }
+      if (action === 'close-reentry') {
+        const ok = await confirmAction({
+          title: 'Close Re-entry Plan',
+          message: 'Close this re-entry plan? You can still view it later.',
+          confirmLabel: 'Close'
+        });
+        if (!ok) return;
+        await updateReentryPlan(plan.id, session.userId, {
+          status: 'CLOSED',
+          closedAt: new Date().toISOString()
+        });
+        await refreshData();
+        await queueAndSync();
+        return;
+      }
+      if (action === 'delete-reentry') {
+        const ok = await confirmAction({
+          title: 'Delete Re-entry Plan',
+          message: 'Delete this re-entry plan? This cannot be undone.',
+          confirmLabel: 'Delete',
+          tone: 'danger'
+        });
+        if (!ok) return;
+        await deleteReentryPlan(plan.id, session.userId);
         await refreshData();
         await queueAndSync();
       }

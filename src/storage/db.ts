@@ -11,11 +11,13 @@ import {
   TRADES_STORE,
   TRANSACTIONS_STORE,
   GOALS_STORE,
-  RECOVERY_STORE
+  RECOVERY_STORE,
+  REENTRY_STORE
 } from '../core/constants';
 import type {
   GoalPlan,
   LivePrice,
+  ReentryPlan,
   RecoveryPlan,
   TradeRecord,
   TransactionRecord,
@@ -73,6 +75,10 @@ export interface FinanceDb extends DBSchema {
     key: string;
     value: RecoveryPlan;
   };
+  reentryPlans: {
+    key: string;
+    value: ReentryPlan;
+  };
   sync: {
     key: string;
     value: SyncState;
@@ -111,6 +117,9 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
       if (!db.objectStoreNames.contains(RECOVERY_STORE)) {
         db.createObjectStore(RECOVERY_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(REENTRY_STORE)) {
+        db.createObjectStore(REENTRY_STORE, { keyPath: 'id' });
+      }
       if (!db.objectStoreNames.contains(SYNC_STORE)) {
         db.createObjectStore(SYNC_STORE, { keyPath: 'id' });
       }
@@ -131,6 +140,7 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
     !db.objectStoreNames.contains(TRANSACTIONS_STORE) ||
     !db.objectStoreNames.contains(GOALS_STORE) ||
     !db.objectStoreNames.contains(RECOVERY_STORE) ||
+    !db.objectStoreNames.contains(REENTRY_STORE) ||
     !db.objectStoreNames.contains(SYNC_STORE) ||
     !db.objectStoreNames.contains(PRICES_STORE) ||
     !db.objectStoreNames.contains(SETTINGS_STORE)
