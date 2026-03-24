@@ -8,5 +8,6 @@ export type AppView =
   | 'transactions'
   | 'finance'
   | 'pnl'
+  | 'help'
   | 'settings'
   | 'admin';

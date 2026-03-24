@@ -213,6 +213,21 @@ const COMPANY_ABBREVIATIONS: Record<string, string> = {
 };
 
 const IMPORT_CONF_KEY = 'trade_import_confidence_v1';
+const IMPORT_AUDIT_KEY = 'trade_import_audit_v1';
+
+type ImportAuditEntry = {
+  id: string;
+  createdAt: string;
+  fileName: string;
+  totalRows: number;
+  validCount: number;
+  invalidCount: number;
+  mappedCount: number;
+  failedCount: number;
+  lowConfidenceCount: number;
+  status: 'imported' | 'failed';
+  error?: string;
+};
 
 type ImportConfidenceEntry = {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -280,6 +295,28 @@ function loadImportConfidence(): ImportConfidenceMap {
 function saveImportConfidence(map: ImportConfidenceMap): void {
   try {
     localStorage.setItem(IMPORT_CONF_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function loadImportAudit(): ImportAuditEntry[] {
+  try {
+    const raw = localStorage.getItem(IMPORT_AUDIT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ImportAuditEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function appendImportAudit(entry: ImportAuditEntry): void {
+  try {
+    const list = loadImportAudit();
+    list.unshift(entry);
+    const trimmed = list.slice(0, 30);
+    localStorage.setItem(IMPORT_AUDIT_KEY, JSON.stringify(trimmed));
   } catch {
     // Ignore storage errors.
   }
@@ -4869,8 +4906,33 @@ export function renderTradesView(root: HTMLElement): void {
           `Imported ${analysis.valid.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
         );
         renderImportReport(failures, lowConfidence);
+        appendImportAudit({
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          fileName: file.name,
+          totalRows: analysis.valid.length + analysis.invalid.length,
+          validCount: analysis.valid.length,
+          invalidCount: analysis.invalid.length,
+          mappedCount,
+          failedCount,
+          lowConfidenceCount: lowConfidence.length,
+          status: 'imported'
+        });
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
+        appendImportAudit({
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          fileName: file.name,
+          totalRows: 0,
+          validCount: 0,
+          invalidCount: 0,
+          mappedCount: 0,
+          failedCount: 0,
+          lowConfidenceCount: 0,
+          status: 'failed',
+          error: toErrorMessage(error)
+        });
       } finally {
         tradeImport.value = '';
       }
@@ -5054,9 +5116,21 @@ export function renderTradesView(root: HTMLElement): void {
     });
 
     const handleHash = () => {
-      const tab = window.location.hash.replace('#', '') || 'history';
-      setTab(tab);
-      updateQuickNavActive(tab);
+      const hash = window.location.hash.replace('#', '') || 'history';
+      if (hash === 'add-trade') {
+        setTab('history');
+        updateQuickNavActive('history');
+        openModal();
+        return;
+      }
+      if (hash === 'import') {
+        setTab('history');
+        updateQuickNavActive('history');
+        tradeImport?.click();
+        return;
+      }
+      setTab(hash);
+      updateQuickNavActive(hash);
     };
 
     window.addEventListener('hashchange', handleHash);

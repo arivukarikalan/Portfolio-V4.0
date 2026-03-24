@@ -6,6 +6,7 @@ import { lucideIcon } from '../ui/icons';
 import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
+import { getSyncState } from '../storage/sync';
 import type { TradeRecord } from '../core/types';
 import { initCloudSync, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
@@ -49,6 +50,7 @@ const rangeOptions = [
 ];
 
 const isDarkTheme = () => document.documentElement.getAttribute('data-theme') === 'dark';
+const ONBOARDING_KEY = 'finance_app_v4_onboarding_v1';
 
 
 function groupByDate(trades: TradeRecord[]): Map<string, TradeRecord[]> {
@@ -142,6 +144,88 @@ export function renderDashboardView(root: HTMLElement): void {
       subtitle: 'Stay on top of your portfolio at a glance.',
       content: `
         <div id="dashboard-feedback" class="alert d-none" role="alert"></div>
+
+        <div class="row g-3 mb-3">
+          <div class="col-lg-7" id="onboarding-col">
+            <div class="card shadow-sm border-0 h-100 onboarding-card" id="onboarding-card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div>
+                    <div class="section-title mb-1">
+                      <span class="section-icon">${lucideIcon('sparkles')}</span>
+                      Getting Started
+                    </div>
+                    <div class="text-muted small">Complete these steps to unlock insights fast.</div>
+                  </div>
+                  <button class="btn btn-sm btn-outline-secondary" id="onboarding-dismiss" type="button">Dismiss</button>
+                </div>
+                <div class="help-steps mt-3">
+                  <div class="help-step">
+                    <div class="help-step-badge">1</div>
+                    <div>
+                      <div class="fw-semibold">Import or add trades</div>
+                      <div class="text-muted small">Use Trades → Import File to load your broker data.</div>
+                    </div>
+                  </div>
+                  <div class="help-step">
+                    <div class="help-step-badge">2</div>
+                    <div>
+                      <div class="fw-semibold">Set targets & fees</div>
+                      <div class="text-muted small">Admin Settings → Allocation, brokerage, target %.</div>
+                    </div>
+                  </div>
+                  <div class="help-step">
+                    <div class="help-step-badge">3</div>
+                    <div>
+                      <div class="fw-semibold">Enable cloud sync</div>
+                      <div class="text-muted small">Tap the bell → Sync Now to keep devices in sync.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-3">
+                  <a class="btn btn-sm btn-outline-primary" href="trades.html#history">${lucideIcon('repeat')} Open Trades</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="settings.html">${lucideIcon('settings')} Settings</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="help.html">${lucideIcon('help-circle')} Help</a>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-5" id="status-col">
+            <div class="card shadow-sm border-0 h-100">
+              <div class="card-body">
+                <div class="section-title mb-2">
+                  <span class="section-icon">${lucideIcon('activity')}</span>
+                  System Status
+                </div>
+                <div class="status-grid">
+                  <div class="status-item">
+                    <div class="text-muted small">Cloud</div>
+                    <div class="fw-semibold" id="status-cloud">--</div>
+                  </div>
+                  <div class="status-item">
+                    <div class="text-muted small">Pending</div>
+                    <div class="fw-semibold" id="status-pending">--</div>
+                  </div>
+                  <div class="status-item">
+                    <div class="text-muted small">Last Push</div>
+                    <div class="fw-semibold" id="status-last-push">--</div>
+                  </div>
+                  <div class="status-item">
+                    <div class="text-muted small">Last Pull</div>
+                    <div class="fw-semibold" id="status-last-pull">--</div>
+                  </div>
+                  <div class="status-item">
+                    <div class="text-muted small">Last Price</div>
+                    <div class="fw-semibold" id="status-last-price">--</div>
+                  </div>
+                </div>
+                <div class="text-muted small mt-3">
+                  Open the bell icon for full sync logs and pending details.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div class="dashboard-strip">
           <div class="dashboard-strip-head">
@@ -353,6 +437,15 @@ export function renderDashboardView(root: HTMLElement): void {
 
     const feedback = root.querySelector<HTMLDivElement>('#dashboard-feedback');
     const refreshButton = root.querySelector<HTMLButtonElement>('#dash-refresh');
+    const onboardingCard = root.querySelector<HTMLDivElement>('#onboarding-card');
+    const onboardingCol = root.querySelector<HTMLDivElement>('#onboarding-col');
+    const statusCol = root.querySelector<HTMLDivElement>('#status-col');
+    const onboardingDismiss = root.querySelector<HTMLButtonElement>('#onboarding-dismiss');
+    const statusCloud = root.querySelector<HTMLDivElement>('#status-cloud');
+    const statusPending = root.querySelector<HTMLDivElement>('#status-pending');
+    const statusLastPush = root.querySelector<HTMLDivElement>('#status-last-push');
+    const statusLastPull = root.querySelector<HTMLDivElement>('#status-last-pull');
+    const statusLastPrice = root.querySelector<HTMLDivElement>('#status-last-price');
     const gainerStrip = root.querySelector<HTMLDivElement>('#gainer-strip');
     const lastRefresh = root.querySelector<HTMLDivElement>('#dash-last-refresh');
     const dashInvested = root.querySelector<HTMLDivElement>('#dash-invested');
@@ -394,6 +487,36 @@ export function renderDashboardView(root: HTMLElement): void {
       root.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.range === rangeId);
       });
+    };
+
+    const formatStatusDate = (value?: string | null) => {
+      if (!value) return '--';
+      return formatDateTime(value);
+    };
+
+    const updateOnboarding = () => {
+      if (!onboardingCol || !statusCol || !onboardingCard) return;
+      const key = `${ONBOARDING_KEY}:${session.userId}`;
+      const dismissed = localStorage.getItem(key) === 'hidden';
+      const shouldShow = !dismissed && trades.length === 0;
+      onboardingCol.classList.toggle('d-none', !shouldShow);
+      if (!shouldShow) {
+        statusCol.classList.remove('col-lg-5');
+        statusCol.classList.add('col-lg-12');
+      } else {
+        statusCol.classList.add('col-lg-5');
+        statusCol.classList.remove('col-lg-12');
+      }
+    };
+
+    const updateSystemStatus = async () => {
+      if (!statusCloud || !statusPending || !statusLastPush || !statusLastPull || !statusLastPrice) return;
+      const state = await getSyncState();
+      statusCloud.textContent = navigator.onLine ? 'Online' : 'Offline';
+      statusPending.textContent = state.pendingChangeCount ? `${state.pendingChangeCount} changes` : 'No pending';
+      statusLastPush.textContent = formatStatusDate(state.lastSyncedAt);
+      statusLastPull.textContent = formatStatusDate(state.lastPullAt);
+      statusLastPrice.textContent = formatStatusDate(state.lastPriceAt);
     };
 
 
@@ -837,6 +960,8 @@ export function renderDashboardView(root: HTMLElement): void {
       renderAllocation();
       renderExposure();
       renderRecent();
+      updateOnboarding();
+      await updateSystemStatus();
     };
 
     const handleThemeChange = () => {
@@ -846,6 +971,20 @@ export function renderDashboardView(root: HTMLElement): void {
     };
 
     window.addEventListener('ui-theme-change', handleThemeChange);
+
+    onboardingDismiss?.addEventListener('click', () => {
+      const key = `${ONBOARDING_KEY}:${session.userId}`;
+      localStorage.setItem(key, 'hidden');
+      updateOnboarding();
+    });
+
+    window.addEventListener('online', () => {
+      void updateSystemStatus();
+    });
+
+    window.addEventListener('offline', () => {
+      void updateSystemStatus();
+    });
 
     refreshButton?.addEventListener('click', async () => {
       if (!refreshButton) return;

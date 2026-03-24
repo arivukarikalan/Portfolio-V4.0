@@ -19,6 +19,7 @@ const allowed: AppView[] = [
   'transactions',
   'finance',
   'pnl',
+  'help',
   'settings',
   'admin'
 ];

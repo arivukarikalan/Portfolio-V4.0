@@ -10,6 +10,7 @@ import { renderTransactionsView } from '../views/transactions';
 import { renderFinanceView } from '../views/finance';
 import { renderPnlView } from '../views/pnl';
 import { renderSettingsView } from '../views/settings';
+import { renderHelpView } from '../views/help';
 
 export type { AppView } from './types';
 
@@ -44,6 +45,9 @@ export function bootstrapApp(root: HTMLElement, view: AppView): void {
       break;
     case 'pnl':
       renderPnlView(root);
+      break;
+    case 'help':
+      renderHelpView(root);
       break;
     case 'settings':
       renderSettingsView(root);
