@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import Chart from 'chart.js/auto';
-import type { Chart as ChartJS, ChartConfiguration } from 'chart.js';
+import type { Chart as ChartJS, ChartConfiguration, ScriptableContext } from 'chart.js';
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
@@ -3343,11 +3343,11 @@ export function renderTradesView(root: HTMLElement): void {
                   pointRadius: 0,
                   stepped: true,
                   segment: {
-                    borderColor: (ctx) => {
+                    borderColor: (ctx: ScriptableContext<'line'>) => {
                       if (recoveryStartIndex === -1) return '#22c55e';
                       return ctx.p0DataIndex < recoveryStartIndex ? '#94a3b8' : '#22c55e';
                     },
-                    borderDash: (ctx) => {
+                    borderDash: (ctx: ScriptableContext<'line'>) => {
                       if (recoveryStartIndex === -1) return [];
                       return ctx.p0DataIndex < recoveryStartIndex ? [4, 4] : [];
                     }
@@ -3666,7 +3666,11 @@ export function renderTradesView(root: HTMLElement): void {
           });
         }
       }
-      usedLossIds.forEach((id) => blockedLossIds.delete(id));
+      usedLossIds.forEach((id) => {
+        if (id) {
+          blockedLossIds.delete(id);
+        }
+      });
       const options = sellTrades
         .map((trade) => ({
           trade,
@@ -3712,9 +3716,13 @@ export function renderTradesView(root: HTMLElement): void {
       };
 
       recoveryModalTitle.textContent = plan ? 'Edit Recovery Plan' : 'Create Recovery Plan';
-      recoveryLossMeta.textContent = plan
-        ? `Linked loss trades: ${normalizedLossTrades.length}`
-        : `Sold at ${formatMoney(lossTrade.price)} on ${formatDate(lossTrade.tradeDate)}`;
+      if (plan) {
+        recoveryLossMeta.textContent = `Linked loss trades: ${normalizedLossTrades.length}`;
+      } else if (lossTrade) {
+        recoveryLossMeta.textContent = `Sold at ${formatMoney(lossTrade.price)} on ${formatDate(lossTrade.tradeDate)}`;
+      } else {
+        recoveryLossMeta.textContent = 'Select a loss trade first.';
+      }
       recoveryNotes.value = plan?.notes ?? '';
       const defaultPlanName = normalizedLossTrades.length
         ? normalizedLossTrades.length === 1
