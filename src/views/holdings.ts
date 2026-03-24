@@ -423,19 +423,19 @@ export function renderHoldingsView(root: HTMLElement): void {
                       const value = Number(dataset.data[index] ?? 0);
                       const pct = totalValue ? (value / totalValue) * 100 : 0;
                       const labelText = String(label ?? '');
-                      return {
-                        text: `${labelText} (${pct.toFixed(1)}%)`,
-                        fillStyle: Array.isArray(dataset.backgroundColor)
+                    return {
+                      text: `${labelText} (${pct.toFixed(1)}%)`,
+                      fillStyle: Array.isArray(dataset.backgroundColor)
                         ? dataset.backgroundColor[index]
                         : dataset.backgroundColor,
                       strokeStyle: dark ? '#0b1220' : '#ffffff',
-                      color: legendText,
+                      fontColor: legendText,
                       lineWidth: 0,
                       hidden: false,
                       index
-                      };
-                    });
-                  }
+                    };
+                  });
+                }
                 }
               },
               tooltip: {
