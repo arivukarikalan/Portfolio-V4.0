@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import Chart from 'chart.js/auto';
-import type { Chart as ChartJS, ChartConfiguration, ScriptableContext } from 'chart.js';
+import type { Chart as ChartJS, ChartConfiguration, ChartDataset, ScriptableLineSegmentContext } from 'chart.js';
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
@@ -3314,87 +3314,88 @@ export function renderTradesView(root: HTMLElement): void {
       recoveryTrendCanvas.classList.remove('d-none');
       recoveryTrendEmpty.classList.add('d-none');
 
+      const datasets: ChartDataset<'line', (number | null)[]>[] = [];
+      if (recoveryPenState.lossTarget) {
+        datasets.push({
+          label: 'Loss Target',
+          data: lossSeries,
+          borderColor: '#f97316',
+          backgroundColor: 'rgba(249, 115, 22, 0.08)',
+          borderWidth: 2,
+          tension: 0.25,
+          fill: false,
+          pointRadius: 0
+        });
+      }
+      if (recoveryPenState.recovered) {
+        datasets.push({
+          label: 'Recovered',
+          data: recoveredSeries,
+          borderColor: '#22c55e',
+          backgroundColor: 'rgba(34, 197, 94, 0.15)',
+          borderWidth: 2,
+          tension: 0.25,
+          fill: false,
+          pointRadius: 0,
+          stepped: true,
+          segment: {
+            borderColor: (ctx: ScriptableLineSegmentContext) => {
+              if (recoveryStartIndex === -1) return '#22c55e';
+              return ctx.p0DataIndex < recoveryStartIndex ? '#94a3b8' : '#22c55e';
+            },
+            borderDash: (ctx: ScriptableLineSegmentContext) => {
+              if (recoveryStartIndex === -1) return [];
+              return ctx.p0DataIndex < recoveryStartIndex ? [4, 4] : [];
+            }
+          }
+        });
+      }
+      if (recoveryPenState.breakEven) {
+        datasets.push({
+          label: 'Break-even',
+          data: breakEvenSeries,
+          borderColor: '#94a3b8',
+          borderDash: [6, 6],
+          borderWidth: 1,
+          tension: 0,
+          fill: false,
+          pointRadius: 0
+        });
+      }
+      if (recoveryPenState.tradeALtp) {
+        datasets.push({
+          label: tradeALabel,
+          data: tradeALine,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.08)',
+          borderWidth: 2,
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0,
+          spanGaps: true,
+          yAxisID: 'y1'
+        });
+      }
+      if (recoveryPenState.tradeBLtp) {
+        datasets.push({
+          label: tradeBLabel,
+          data: tradeBLine,
+          borderColor: '#a855f7',
+          backgroundColor: 'rgba(168, 85, 247, 0.08)',
+          borderWidth: 2,
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0,
+          spanGaps: true,
+          yAxisID: 'y1'
+        });
+      }
+
       const config: ChartConfiguration<'line', (number | null)[], string> = {
         type: 'line',
         data: {
           labels,
-          datasets: [
-            recoveryPenState.lossTarget
-              ? {
-                  label: 'Loss Target',
-                  data: lossSeries,
-                  borderColor: '#f97316',
-                  backgroundColor: 'rgba(249, 115, 22, 0.08)',
-                  borderWidth: 2,
-                  tension: 0.25,
-                  fill: false,
-                  pointRadius: 0
-                }
-              : null,
-            recoveryPenState.recovered
-              ? {
-                  label: 'Recovered',
-                  data: recoveredSeries,
-                  borderColor: '#22c55e',
-                  backgroundColor: 'rgba(34, 197, 94, 0.15)',
-                  borderWidth: 2,
-                  tension: 0.25,
-                  fill: false,
-                  pointRadius: 0,
-                  stepped: true,
-                  segment: {
-                    borderColor: (ctx: ScriptableContext<'line'>) => {
-                      if (recoveryStartIndex === -1) return '#22c55e';
-                      return ctx.p0DataIndex < recoveryStartIndex ? '#94a3b8' : '#22c55e';
-                    },
-                    borderDash: (ctx: ScriptableContext<'line'>) => {
-                      if (recoveryStartIndex === -1) return [];
-                      return ctx.p0DataIndex < recoveryStartIndex ? [4, 4] : [];
-                    }
-                  }
-                }
-              : null,
-            recoveryPenState.breakEven
-              ? {
-                  label: 'Break-even',
-                  data: breakEvenSeries,
-                  borderColor: '#94a3b8',
-                  borderDash: [6, 6],
-                  borderWidth: 1,
-                  tension: 0,
-                  fill: false,
-                  pointRadius: 0
-                }
-              : null,
-            recoveryPenState.tradeALtp
-              ? {
-                  label: tradeALabel,
-                  data: tradeALine,
-                  borderColor: '#3b82f6',
-                  backgroundColor: 'rgba(59, 130, 246, 0.08)',
-                  borderWidth: 2,
-                  tension: 0.3,
-                  fill: false,
-                  pointRadius: 0,
-                  spanGaps: true,
-                  yAxisID: 'y1'
-                }
-              : null,
-            recoveryPenState.tradeBLtp
-              ? {
-                  label: tradeBLabel,
-                  data: tradeBLine,
-                  borderColor: '#a855f7',
-                  backgroundColor: 'rgba(168, 85, 247, 0.08)',
-                  borderWidth: 2,
-                  tension: 0.3,
-                  fill: false,
-                  pointRadius: 0,
-                  spanGaps: true,
-                  yAxisID: 'y1'
-                }
-              : null
-          ].filter((dataset): dataset is Exclude<typeof dataset, null> => Boolean(dataset))
+          datasets
         },
         options: {
           responsive: true,
