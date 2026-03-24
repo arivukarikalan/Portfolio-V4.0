@@ -138,6 +138,9 @@ export function renderLoginView(root: HTMLElement): void {
             <div class="text-center text-muted small mt-3">
               Cloud sync uses a private Apps Script URL. Keep it secure.
             </div>
+            <div class="text-center text-muted small mt-1">
+              © 2026 Arivu
+            </div>
           </div>
         </div>
       </div>
