@@ -5,6 +5,7 @@ import { addActivityLog, listActivityLogs } from '../storage/activity';
 import { listTrades, replaceTradesForUser } from '../storage/trades';
 import { listTransactions, replaceTransactionsForUser } from '../storage/transactions';
 import { listGoals, replaceGoalsForUser } from '../storage/goals';
+import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recoveryPlans';
 import { getAppConfig } from './config';
 import { syncLivePrices } from './livePrices';
 import { upsertLivePrices } from '../storage/prices';
@@ -59,6 +60,7 @@ function pendingSummary(payload?: SnapshotPayload): string {
     (payload.transactions?.length || 0) +
     (payload.goals?.length || 0) +
     (payload.settings ? 1 : 0) +
+    (payload.recoveryPlans?.length || 0) +
     overrideCount;
   return `${count} items`;
 }
@@ -157,10 +159,11 @@ async function updateNotificationStats(): Promise<void> {
 }
 
 async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
-  const [trades, transactions, goals] = await Promise.all([
+  const [trades, transactions, goals, recoveryPlans] = await Promise.all([
     listTrades(userId),
     listTransactions(userId),
-    listGoals(userId)
+    listGoals(userId),
+    listRecoveryPlans(userId)
   ]);
   const settings = await getUserSettings(userId);
   const mappingOverrides = loadMappingOverrides();
@@ -171,7 +174,8 @@ async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
     transactions,
     goals,
     settings,
-    mappingOverrides
+    mappingOverrides,
+    recoveryPlans
   };
 }
 
@@ -184,6 +188,9 @@ async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<
   }
   if (Array.isArray(payload.goals)) {
     await replaceGoalsForUser(userId, payload.goals);
+  }
+  if (Array.isArray(payload.recoveryPlans)) {
+    await replaceRecoveryPlansForUser(userId, payload.recoveryPlans);
   }
   if (payload.settings && payload.settings.userId === userId) {
     await saveUserSettings(payload.settings);

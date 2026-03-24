@@ -76,6 +76,49 @@ export type GoalPlan = {
   updatedAt: string;
 };
 
+export type RecoveryLeg = {
+  id: string;
+  tradeId?: string;
+  symbol: string;
+  quantity: number;
+  buyPrice: number;
+  investedAmount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RecoveryLossLeg = {
+  id: string;
+  tradeId?: string;
+  symbol: string;
+  quantity: number;
+  sellPrice: number;
+  lossAmount: number;
+  tradeDate: string;
+  holdDays?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RecoveryPlan = {
+  id: string;
+  userId: string;
+  status: 'ACTIVE' | 'CLOSED';
+  lossTradeId?: string;
+  lossSymbol: string;
+  lossQuantity: number;
+  lossSellPrice: number;
+  lossAmount: number;
+  lossTradeDate: string;
+  lossHoldDays?: number | null;
+  lossTrades?: RecoveryLossLeg[];
+  recoveryTrades: RecoveryLeg[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+};
+
 export type UserSettings = {
   userId: string;
   maxAllocationPct: number;
@@ -115,4 +158,5 @@ export type SnapshotPayload = {
   goals?: GoalPlan[];
   settings: UserSettings | null;
   mappingOverrides?: MappingOverrideMap;
+  recoveryPlans?: RecoveryPlan[];
 };

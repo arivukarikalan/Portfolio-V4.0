@@ -10,9 +10,18 @@ import {
   SYNC_STORE,
   TRADES_STORE,
   TRANSACTIONS_STORE,
-  GOALS_STORE
+  GOALS_STORE,
+  RECOVERY_STORE
 } from '../core/constants';
-import type { GoalPlan, LivePrice, TradeRecord, TransactionRecord, UserSession, UserSettings } from '../core/types';
+import type {
+  GoalPlan,
+  LivePrice,
+  RecoveryPlan,
+  TradeRecord,
+  TransactionRecord,
+  UserSession,
+  UserSettings
+} from '../core/types';
 
 type SessionRecord = {
   id: string;
@@ -60,6 +69,10 @@ export interface FinanceDb extends DBSchema {
     key: string;
     value: GoalPlan;
   };
+  recoveryPlans: {
+    key: string;
+    value: RecoveryPlan;
+  };
   sync: {
     key: string;
     value: SyncState;
@@ -95,6 +108,9 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
       if (!db.objectStoreNames.contains(GOALS_STORE)) {
         db.createObjectStore(GOALS_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(RECOVERY_STORE)) {
+        db.createObjectStore(RECOVERY_STORE, { keyPath: 'id' });
+      }
       if (!db.objectStoreNames.contains(SYNC_STORE)) {
         db.createObjectStore(SYNC_STORE, { keyPath: 'id' });
       }
@@ -114,6 +130,7 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
     !db.objectStoreNames.contains(TRADES_STORE) ||
     !db.objectStoreNames.contains(TRANSACTIONS_STORE) ||
     !db.objectStoreNames.contains(GOALS_STORE) ||
+    !db.objectStoreNames.contains(RECOVERY_STORE) ||
     !db.objectStoreNames.contains(SYNC_STORE) ||
     !db.objectStoreNames.contains(PRICES_STORE) ||
     !db.objectStoreNames.contains(SETTINGS_STORE)

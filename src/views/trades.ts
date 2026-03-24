@@ -5,7 +5,7 @@ import { lucideIcon } from '../ui/icons';
 import { renderConfirmModal, bindConfirmModal } from '../ui/confirm';
 import { addTrade, deleteTrade, listTrades, updateTrade, type TradeInput } from '../storage/trades';
 import { getUserSettings } from '../storage/settings';
-import type { TradeRecord, TradeSide } from '../core/types';
+import type { RecoveryLeg, RecoveryLossLeg, RecoveryPlan, TradeRecord, TradeSide } from '../core/types';
 import { parseCsvText } from '../utils/csv';
 import { toErrorMessage } from '../utils/errors';
 import {
@@ -17,6 +17,7 @@ import {
 } from '../services/tickers';
 import { initCloudSync, queueSnapshot, syncNow } from '../services/cloudSync';
 import { listLivePrices } from '../storage/prices';
+import { addRecoveryPlan, deleteRecoveryPlan, listRecoveryPlans, updateRecoveryPlan } from '../storage/recoveryPlans';
 import { requireSession } from './guards';
 import { formatAmount, formatDate, formatDateTime, formatMoney, formatPct, coerceNumber } from '../utils/format';
 import { nameInitials, normalizeName, normalizeSymbol, stripSeriesSuffix } from '../utils/symbols';
@@ -91,6 +92,21 @@ type TickerSummary = {
   changePct?: number | null;
   needsReview?: boolean;
   confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+};
+
+type RecoveryLegSummary = RecoveryLeg & {
+  livePrice?: number | null;
+  currentValue?: number;
+  pnl?: number;
+  pnlPct?: number | null;
+};
+
+type RecoveryPlanSummary = RecoveryPlan & {
+  recoveredAmount: number;
+  remainingAmount: number;
+  recoveryPct: number | null;
+  isRecovered: boolean;
+  legs: RecoveryLegSummary[];
 };
 
 function normalizeHeader(value: unknown): string {
@@ -498,7 +514,7 @@ async function parseTradeFile(file: File, userId: string): Promise<CsvAnalysis> 
   return combined;
 }
 
-function renderTableRows(trades: TradeRecord[]): string {
+function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
     return '<tr><td colspan="7" class="text-muted text-center py-3">No trades yet.</td></tr>';
   }
@@ -509,6 +525,13 @@ function renderTableRows(trades: TradeRecord[]): string {
       if (row.kind === 'single') {
         const trade = row.trade;
         const sideBadge = trade.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
+        const isLinkedLoss = linkedLossTradeIds.has(trade.id);
+        const recoveryButton =
+          trade.side === 'SELL'
+            ? isLinkedLoss
+              ? '<button class="btn btn-sm btn-outline-secondary me-2" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
+              : '<button class="btn btn-sm btn-outline-success me-2" data-action="recover">Recover</button>'
+            : '';
         return `
           <tr data-trade-id="${trade.id}">
             <td>${formatDate(trade.tradeDate)}</td>
@@ -518,6 +541,7 @@ function renderTableRows(trades: TradeRecord[]): string {
             <td>${formatMoney(trade.price)}</td>
             <td>${formatAmount(trade.quantity, trade.price)}</td>
             <td class="text-end text-nowrap">
+              ${recoveryButton}
               <button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button>
               <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
             </td>
@@ -528,6 +552,13 @@ function renderTableRows(trades: TradeRecord[]): string {
       const fillCount = row.trades.length;
       const childRows = row.trades
         .map((trade) => {
+          const isLinkedLoss = linkedLossTradeIds.has(trade.id);
+          const recoveryButton =
+            trade.side === 'SELL'
+              ? isLinkedLoss
+                ? '<button class="btn btn-sm btn-outline-secondary me-2" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
+                : '<button class="btn btn-sm btn-outline-success me-2" data-action="recover">Recover</button>'
+              : '';
           return `
             <tr class="trade-group-child d-none" data-parent-group="${row.key}" data-trade-id="${trade.id}">
               <td>${formatDate(trade.tradeDate)}</td>
@@ -537,6 +568,7 @@ function renderTableRows(trades: TradeRecord[]): string {
               <td>${formatMoney(trade.price)}</td>
               <td>${formatAmount(trade.quantity, trade.price)}</td>
               <td class="text-end text-nowrap">
+                ${recoveryButton}
                 <button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button>
                 <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
               </td>
@@ -562,7 +594,7 @@ function renderTableRows(trades: TradeRecord[]): string {
     .join('');
 }
 
-function renderCardRows(trades: TradeRecord[]): string {
+function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
     return '<div class="text-muted text-center py-3">No trades yet.</div>';
   }
@@ -573,6 +605,13 @@ function renderCardRows(trades: TradeRecord[]): string {
       if (row.kind === 'single') {
         const trade = row.trade;
         const sideBadge = trade.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
+        const isLinkedLoss = linkedLossTradeIds.has(trade.id);
+        const recoveryButton =
+          trade.side === 'SELL'
+            ? isLinkedLoss
+              ? '<button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
+              : '<button class="btn btn-sm btn-outline-success flex-grow-1" data-action="recover">Recover</button>'
+            : '';
         return `
           <div class="card trade-card shadow-sm border-0" data-trade-id="${trade.id}">
             <div class="card-body d-flex flex-column gap-2">
@@ -591,6 +630,7 @@ function renderCardRows(trades: TradeRecord[]): string {
                 <div><span class="text-muted">Amount:</span> ${formatAmount(trade.quantity, trade.price)}</div>
               </div>
               <div class="d-flex gap-2">
+                ${recoveryButton}
                 <button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button>
                 <button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>
               </div>
@@ -602,6 +642,13 @@ function renderCardRows(trades: TradeRecord[]): string {
       const fillCount = row.trades.length;
       const childItems = row.trades
         .map((trade) => {
+          const isLinkedLoss = linkedLossTradeIds.has(trade.id);
+          const recoveryButton =
+            trade.side === 'SELL'
+              ? isLinkedLoss
+                ? '<button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
+                : '<button class="btn btn-sm btn-outline-success flex-grow-1" data-action="recover">Recover</button>'
+              : '';
           return `
             <div class="trade-group-child d-none" data-parent-group="${row.key}" data-trade-id="${trade.id}">
               <div class="d-flex justify-content-between align-items-center small">
@@ -609,6 +656,7 @@ function renderCardRows(trades: TradeRecord[]): string {
                 <div>${trade.quantity} @ ${formatMoney(trade.price)}</div>
               </div>
               <div class="d-flex gap-2 mt-2">
+                ${recoveryButton}
                 <button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button>
                 <button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>
               </div>
@@ -784,7 +832,8 @@ export function renderTradesView(root: HTMLElement): void {
     const quickNav = [
       { id: 'list', label: 'Ticker List', href: 'trades.html#list', icon: 'list' },
       { id: 'request', label: 'Ticker Request', href: 'trades.html#request', icon: 'send' },
-      { id: 'history', label: 'Trade History', href: 'trades.html#history', icon: 'history' }
+      { id: 'history', label: 'Trade History', href: 'trades.html#history', icon: 'history' },
+      { id: 'recovery', label: 'Recovery Plans', href: 'trades.html#recovery', icon: 'rotate-cw' }
     ];
 
     root.innerHTML = renderShell({
@@ -1026,6 +1075,91 @@ export function renderTradesView(root: HTMLElement): void {
           </div>
         </section>
 
+        <section class="trade-tab d-none" data-trade-panel="recovery">
+          <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h6 mb-0 section-title">
+                  <span class="section-icon">${lucideIcon('rotate-cw')}</span>
+                  Recovery Dashboard
+                </h2>
+                <div class="text-muted small" id="recovery-summary-updated">--</div>
+              </div>
+              <div class="row g-2">
+                <div class="col-sm-6 col-lg-3">
+                  <div class="kpi-card">
+                    <div class="text-muted small">Active Plans</div>
+                    <div class="h5 mb-0" id="recovery-active">0</div>
+                  </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                  <div class="kpi-card">
+                    <div class="text-muted small">Recovered Plans</div>
+                    <div class="h5 mb-0" id="recovery-recovered">0</div>
+                  </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                  <div class="kpi-card">
+                    <div class="text-muted small">Recovery Win %</div>
+                    <div class="h5 mb-0" id="recovery-win">--</div>
+                  </div>
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                  <div class="kpi-card">
+                    <div class="text-muted small">Net Recovery (Live)</div>
+                    <div class="h5 mb-0" id="recovery-net">--</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-xl-7">
+              <div class="card shadow-sm border-0">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('layers')}</span>
+                      Recovery Plans
+                    </h3>
+                    <div class="text-muted small" id="recovery-count">0 plans</div>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th>Plan</th>
+                          <th>Loss</th>
+                          <th>Recovered</th>
+                          <th>Remaining</th>
+                          <th>Status</th>
+                          <th class="text-end">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody id="recovery-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-xl-5">
+              <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h3 class="h6 mb-0 section-title">
+                      <span class="section-icon">${lucideIcon('activity')}</span>
+                      Plan Comparison
+                    </h3>
+                    <div class="text-muted small" id="recovery-detail-title">Select a plan</div>
+                  </div>
+                  <div id="recovery-detail" class="text-muted small">Choose a plan to compare Trade A vs Trade B.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div class="app-modal" id="trade-modal" aria-hidden="true">
           <div class="app-modal-backdrop" data-close="modal"></div>
           <div class="app-modal-dialog">
@@ -1094,6 +1228,79 @@ export function renderTradesView(root: HTMLElement): void {
                   <div class="mb-2" id="prebuy-zone"></div>
                   <div class="mb-2" id="prebuy-allocation"></div>
                   <ul class="small mb-0" id="prebuy-list"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="app-modal" id="recovery-modal" aria-hidden="true">
+          <div class="app-modal-backdrop" data-close="recovery"></div>
+          <div class="app-modal-dialog">
+            <div class="card shadow-lg border-0">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h3 class="h6 mb-0" id="recovery-modal-title">Create Recovery Plan</h3>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="recovery-modal-close">Close</button>
+                </div>
+                <div class="border rounded-3 p-3 mb-3 bg-light">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="fw-semibold">Loss Trades (A)</div>
+                    <span class="badge text-bg-danger" id="recovery-loss-badge">LOSS</span>
+                  </div>
+                  <div class="small text-muted mb-2" id="recovery-loss-meta">--</div>
+                  <div class="d-flex justify-content-between align-items-center small">
+                    <div><span class="text-muted">Total Loss:</span> <span id="recovery-loss-amount">--</span></div>
+                    <div><span class="text-muted">Trades:</span> <span id="recovery-loss-count">--</span></div>
+                  </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  <select class="form-select form-select-sm w-auto" id="recovery-loss-trade">
+                    <option value="">Add from SELL trade...</option>
+                  </select>
+                  <button class="btn btn-sm btn-outline-primary" type="button" id="recovery-loss-add">Add Loss</button>
+                </div>
+                <div class="table-responsive mb-3">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Qty</th>
+                        <th>Sell Price</th>
+                        <th>Loss</th>
+                        <th class="text-end">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recovery-loss-body"></tbody>
+                  </table>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  <select class="form-select form-select-sm w-auto" id="recovery-leg-trade">
+                    <option value="">Add from BUY trade...</option>
+                  </select>
+                  <button class="btn btn-sm btn-outline-primary" type="button" id="recovery-leg-add">Add Trade</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="recovery-leg-add-manual">Add Manual</button>
+                </div>
+                <div class="table-responsive mb-3">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Qty</th>
+                        <th>Buy Price</th>
+                        <th>Invested</th>
+                        <th class="text-end">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recovery-legs-body"></tbody>
+                  </table>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Notes (optional)</label>
+                  <input class="form-control" id="recovery-notes" placeholder="Why this recovery plan?" />
+                </div>
+                <div class="d-flex gap-2 justify-content-end">
+                  <button class="btn btn-outline-secondary" type="button" id="recovery-cancel">Cancel</button>
+                  <button class="btn btn-primary" type="button" id="recovery-save">Save Plan</button>
                 </div>
               </div>
             </div>
@@ -1193,6 +1400,31 @@ export function renderTradesView(root: HTMLElement): void {
     const requestSymbol = root.querySelector<HTMLInputElement>('#ticker-request-symbol');
     const requestNote = root.querySelector<HTMLInputElement>('#ticker-request-note');
     const requestSubmit = root.querySelector<HTMLButtonElement>('#ticker-request-submit');
+    const recoverySummaryUpdated = root.querySelector<HTMLElement>('#recovery-summary-updated');
+    const recoveryActive = root.querySelector<HTMLElement>('#recovery-active');
+    const recoveryRecovered = root.querySelector<HTMLElement>('#recovery-recovered');
+    const recoveryWin = root.querySelector<HTMLElement>('#recovery-win');
+    const recoveryNet = root.querySelector<HTMLElement>('#recovery-net');
+    const recoveryCount = root.querySelector<HTMLElement>('#recovery-count');
+    const recoveryBody = root.querySelector<HTMLTableSectionElement>('#recovery-body');
+    const recoveryDetail = root.querySelector<HTMLDivElement>('#recovery-detail');
+    const recoveryDetailTitle = root.querySelector<HTMLElement>('#recovery-detail-title');
+    const recoveryModal = root.querySelector<HTMLDivElement>('#recovery-modal');
+    const recoveryModalTitle = root.querySelector<HTMLElement>('#recovery-modal-title');
+    const recoveryModalClose = root.querySelector<HTMLButtonElement>('#recovery-modal-close');
+    const recoveryCancel = root.querySelector<HTMLButtonElement>('#recovery-cancel');
+    const recoverySave = root.querySelector<HTMLButtonElement>('#recovery-save');
+    const recoveryLegTrade = root.querySelector<HTMLSelectElement>('#recovery-leg-trade');
+    const recoveryLegAdd = root.querySelector<HTMLButtonElement>('#recovery-leg-add');
+    const recoveryLegAddManual = root.querySelector<HTMLButtonElement>('#recovery-leg-add-manual');
+    const recoveryLegsBody = root.querySelector<HTMLTableSectionElement>('#recovery-legs-body');
+    const recoveryNotes = root.querySelector<HTMLInputElement>('#recovery-notes');
+    const recoveryLossMeta = root.querySelector<HTMLElement>('#recovery-loss-meta');
+    const recoveryLossCount = root.querySelector<HTMLElement>('#recovery-loss-count');
+    const recoveryLossAmount = root.querySelector<HTMLElement>('#recovery-loss-amount');
+    const recoveryLossTrade = root.querySelector<HTMLSelectElement>('#recovery-loss-trade');
+    const recoveryLossAdd = root.querySelector<HTMLButtonElement>('#recovery-loss-add');
+    const recoveryLossBody = root.querySelector<HTMLTableSectionElement>('#recovery-loss-body');
     const mappingReviewModal = root.querySelector<HTMLDivElement>('#mapping-review-modal');
     const mappingReviewClose = root.querySelector<HTMLButtonElement>('#mapping-review-close');
     const mappingReviewCancel = root.querySelector<HTMLButtonElement>('#mapping-review-cancel');
@@ -1253,6 +1485,31 @@ export function renderTradesView(root: HTMLElement): void {
       !requestSymbol ||
       !requestNote ||
       !requestSubmit ||
+      !recoverySummaryUpdated ||
+      !recoveryActive ||
+      !recoveryRecovered ||
+      !recoveryWin ||
+      !recoveryNet ||
+      !recoveryCount ||
+      !recoveryBody ||
+      !recoveryDetail ||
+      !recoveryDetailTitle ||
+      !recoveryModal ||
+      !recoveryModalTitle ||
+      !recoveryModalClose ||
+      !recoveryCancel ||
+      !recoverySave ||
+      !recoveryLegTrade ||
+      !recoveryLegAdd ||
+      !recoveryLegAddManual ||
+      !recoveryLegsBody ||
+      !recoveryNotes ||
+      !recoveryLossMeta ||
+      !recoveryLossCount ||
+      !recoveryLossAmount ||
+      !recoveryLossTrade ||
+      !recoveryLossAdd ||
+      !recoveryLossBody ||
       !mappingReviewModal ||
       !mappingReviewClose ||
       !mappingReviewCancel ||
@@ -1271,8 +1528,19 @@ export function renderTradesView(root: HTMLElement): void {
     let nseMasterRows: NseRow[] = [];
     let tickerRequests: TickerRequest[] = [];
     let tickerRows: TickerSummary[] = [];
+    let recoveryPlans: RecoveryPlan[] = [];
+    let recoveryRows: RecoveryPlanSummary[] = [];
+    let linkedLossTradeIds = new Set<string>();
+    let activeRecoveryPlanId: string | null = null;
     let importConfidence = loadImportConfidence();
     let userSettings = await getUserSettings(session.userId);
+    let recoveryDraft: {
+      planId?: string;
+      lossTrades: RecoveryLossLeg[];
+      legs: RecoveryLeg[];
+    } = { legs: [], lossTrades: [] };
+    let recoveryDraftLossAmount = 0;
+    let recoveryDraftHoldDays: number | null = null;
     let tickerSort: { key: 'ticker' | 'ltp' | 'chg' | 'last'; dir: 'asc' | 'desc' } = {
       key: 'ticker',
       dir: 'asc'
@@ -1574,6 +1842,150 @@ export function renderTradesView(root: HTMLElement): void {
         prebuyAllocation.innerHTML = '';
       }
     };
+
+    const computeLossSnapshot = (trade: TradeRecord) => {
+      if (trade.side !== 'SELL') return { lossAmount: 0, avgCost: null, holdDays: null };
+      const symbol = normalizeSymbol(trade.symbol);
+      if (!symbol) return { lossAmount: 0, avgCost: null, holdDays: null };
+      const relevant = trades
+        .filter((item) => normalizeSymbol(item.symbol) === symbol)
+        .sort((a, b) => {
+          if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
+          return a.createdAt.localeCompare(b.createdAt);
+        });
+
+      const lots: Array<{ qty: number; price: number; date: string | null }> = [];
+      const consumeLots = (remaining: number) => {
+        for (let i = 0; i < lots.length && remaining > 0; i += 1) {
+          const lot = lots[i];
+          if (lot.qty > remaining) {
+            lot.qty -= remaining;
+            remaining = 0;
+          } else {
+            remaining -= lot.qty;
+            lots.splice(i, 1);
+            i -= 1;
+          }
+        }
+      };
+
+      for (const item of relevant) {
+        if (item.id === trade.id) {
+          const totalQty = lots.reduce((sum, lot) => sum + lot.qty, 0);
+          const totalCost = lots.reduce((sum, lot) => sum + lot.qty * lot.price, 0);
+          const avgCost = totalQty > 0 ? totalCost / totalQty : null;
+          const lossAmount =
+            avgCost !== null ? Math.max(0, (avgCost - Number(trade.price)) * Number(trade.quantity)) : 0;
+          let holdDays: number | null = null;
+          if (lots.length && trade.tradeDate) {
+            const start = lots[0].date ? new Date(lots[0].date) : null;
+            const end = trade.tradeDate ? new Date(trade.tradeDate) : null;
+            if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+              holdDays = Math.max(0, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+            }
+          }
+          return { lossAmount, avgCost, holdDays };
+        }
+
+        if (item.side === 'BUY') {
+          lots.push({ qty: item.quantity, price: item.price, date: item.tradeDate || null });
+        } else if (item.side === 'SELL') {
+          consumeLots(item.quantity);
+        }
+      }
+      return { lossAmount: 0, avgCost: null, holdDays: null };
+    };
+
+    const getLossTradeForPlan = (plan: RecoveryPlan): TradeRecord => {
+      const lossTrades = normalizeLossTrades(plan);
+      const primary = lossTrades[0];
+      const tradeId = primary?.tradeId || plan.lossTradeId;
+      const existing = tradeId ? trades.find((trade) => trade.id === tradeId) : undefined;
+      if (existing) return existing;
+      return {
+        id: tradeId || crypto.randomUUID(),
+        userId: session.userId,
+        symbol: primary?.symbol || plan.lossSymbol,
+        side: 'SELL',
+        quantity: primary?.quantity || plan.lossQuantity,
+        price: primary?.sellPrice || plan.lossSellPrice,
+        tradeDate: primary?.tradeDate || plan.lossTradeDate,
+        notes: '',
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt
+      };
+    };
+
+    const normalizeLossTrades = (plan: RecoveryPlan): RecoveryLossLeg[] => {
+      if (plan.lossTrades && plan.lossTrades.length) {
+        return plan.lossTrades.map((leg) => ({ ...leg }));
+      }
+      return [
+        {
+          id: plan.lossTradeId || crypto.randomUUID(),
+          tradeId: plan.lossTradeId,
+          symbol: plan.lossSymbol,
+          quantity: plan.lossQuantity,
+          sellPrice: plan.lossSellPrice,
+          lossAmount: plan.lossAmount,
+          tradeDate: plan.lossTradeDate,
+          holdDays: plan.lossHoldDays ?? null,
+          createdAt: plan.createdAt,
+          updatedAt: plan.updatedAt
+        }
+      ];
+    };
+
+    const buildLinkedLossTradeIds = (plans: RecoveryPlan[]): Set<string> => {
+      const ids = new Set<string>();
+      plans.forEach((plan) => {
+        const lossTrades = normalizeLossTrades(plan);
+        lossTrades.forEach((leg) => {
+          if (leg.tradeId) {
+            ids.add(leg.tradeId);
+          }
+        });
+      });
+      return ids;
+    };
+
+    const buildRecoverySummaries = (
+      plans: RecoveryPlan[],
+      priceMap: Map<string, { price?: number | string }>
+    ): RecoveryPlanSummary[] =>
+      plans.map((plan) => {
+        const lossTrades = normalizeLossTrades(plan);
+        const totalLoss = lossTrades.reduce((sum, leg) => sum + (leg.lossAmount || 0), 0);
+        const legs = plan.recoveryTrades.map((leg) => {
+          const live = priceMap.get(normalizeSymbol(leg.symbol))?.price;
+          const livePrice = coerceNumber(live);
+          const invested = leg.investedAmount || leg.quantity * leg.buyPrice;
+          const currentValue = livePrice !== null ? livePrice * leg.quantity : 0;
+          const pnl = currentValue - invested;
+          const pnlPct = invested > 0 ? (pnl / invested) * 100 : null;
+          return {
+            ...leg,
+            livePrice,
+            currentValue,
+            pnl,
+            pnlPct
+          };
+        });
+        const recoveredAmount = legs.reduce((sum, leg) => sum + (leg.pnl || 0), 0);
+        const remainingAmount = totalLoss - recoveredAmount;
+        const recoveryPct = totalLoss > 0 ? (recoveredAmount / totalLoss) * 100 : null;
+        const isRecovered = totalLoss > 0 ? recoveredAmount >= totalLoss : false;
+        return {
+          ...plan,
+          lossTrades,
+          lossAmount: totalLoss,
+          legs,
+          recoveredAmount,
+          remainingAmount,
+          recoveryPct,
+          isRecovered
+        };
+      });
 
     const resolveImportedSymbol = (rawSymbol: string, companyName?: string): ImportSymbolResolution => {
       const normalized = normalizeSymbol(rawSymbol);
@@ -1999,6 +2411,279 @@ export function renderTradesView(root: HTMLElement): void {
       requestCount.textContent = `${rows.length} requests`;
     };
 
+    const renderRecoveryRows = (rows: RecoveryPlanSummary[]) => {
+      if (!rows.length) {
+        recoveryBody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-3">No recovery plans yet.</td></tr>';
+        recoveryCount.textContent = '0 plans';
+        return;
+      }
+      recoveryBody.innerHTML = rows
+        .map((plan) => {
+          const lossTrades = plan.lossTrades && plan.lossTrades.length ? plan.lossTrades : normalizeLossTrades(plan);
+          const lossLabel = lossTrades.length
+            ? lossTrades.length === 1
+              ? lossTrades[0].symbol
+              : `${lossTrades[0].symbol} +${lossTrades.length - 1}`
+            : plan.lossSymbol || 'Loss plan';
+          const statusLabel =
+            plan.status === 'CLOSED' ? 'CLOSED' : plan.isRecovered ? 'RECOVERED' : 'ACTIVE';
+          const statusBadge =
+            plan.status === 'CLOSED'
+              ? 'text-bg-secondary'
+              : plan.isRecovered
+                ? 'text-bg-success'
+                : 'text-bg-warning';
+          const recoveredLabel =
+            plan.recoveredAmount >= 0 ? formatMoney(plan.recoveredAmount) : `-${formatMoney(Math.abs(plan.recoveredAmount))}`;
+          return `
+            <tr data-plan-id="${plan.id}">
+              <td class="fw-semibold">${lossLabel}</td>
+              <td>${formatMoney(plan.lossAmount)}</td>
+              <td>${recoveredLabel}</td>
+              <td>${formatMoney(Math.max(0, plan.remainingAmount))}</td>
+              <td><span class="badge ${statusBadge}">${statusLabel}</span></td>
+              <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-outline-secondary me-2" data-action="view-plan">View</button>
+                <button class="btn btn-sm btn-outline-primary me-2" data-action="edit-plan">Edit</button>
+                ${
+                  plan.status === 'ACTIVE'
+                    ? '<button class="btn btn-sm btn-outline-success me-2" data-action="close-plan">Close</button>'
+                    : ''
+                }
+                <button class="btn btn-sm btn-outline-danger" data-action="delete-plan">Delete</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+      recoveryCount.textContent = `${rows.length} plans`;
+    };
+
+    const renderRecoveryDetail = (plan: RecoveryPlanSummary | null) => {
+      if (!plan) {
+        recoveryDetailTitle.textContent = 'Select a plan';
+        recoveryDetail.innerHTML = 'Choose a plan to compare Trade A vs Trade B.';
+        return;
+      }
+      const lossTrades = plan.lossTrades && plan.lossTrades.length ? plan.lossTrades : normalizeLossTrades(plan);
+      const lossLabel = lossTrades.length
+        ? lossTrades.length === 1
+          ? lossTrades[0].symbol
+          : `${lossTrades[0].symbol} +${lossTrades.length - 1}`
+        : plan.lossSymbol || 'Loss plan';
+      recoveryDetailTitle.textContent = `${lossLabel} plan`;
+      const legs = plan.legs
+        .map((leg) => {
+          const livePrice = leg.livePrice ?? null;
+          const pnl = leg.pnl ?? 0;
+          const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
+          return `
+            <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+              <div>
+                <div class="fw-semibold">${leg.symbol}</div>
+                <div class="text-muted small">${leg.quantity} @ ${formatMoney(leg.buyPrice)}</div>
+              </div>
+              <div class="text-end">
+                <div class="small text-muted">LTP ${formatMoney(livePrice)}</div>
+                <div class="fw-semibold ${pnlClass}">${formatMoney(pnl)}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+      const recoveredLabel =
+        plan.recoveredAmount >= 0 ? formatMoney(plan.recoveredAmount) : `-${formatMoney(Math.abs(plan.recoveredAmount))}`;
+      const lossItems = lossTrades
+        .map((leg) => {
+          return `
+            <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+              <div>
+                <div class="fw-semibold">${leg.symbol}</div>
+                <div class="text-muted small">Sold ${leg.quantity} @ ${formatMoney(leg.sellPrice)}</div>
+              </div>
+              <div class="text-end">
+                <div class="small text-muted">${formatDate(leg.tradeDate)}</div>
+                <div class="fw-semibold text-danger">${formatMoney(leg.lossAmount)}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+      recoveryDetail.innerHTML = `
+        <div class="mb-3">
+          <div class="fw-semibold mb-2">Trade A (Loss)</div>
+          <div class="d-flex flex-column">${lossItems || '<div class="text-muted small">No loss trades linked.</div>'}</div>
+        </div>
+        <div class="mb-3">
+          <div class="fw-semibold mb-1">Trade B (Recovery)</div>
+          <div class="small text-muted">Recovered: ${recoveredLabel}</div>
+          <div class="small text-muted">Remaining loss: ${formatMoney(Math.max(0, plan.remainingAmount))}</div>
+          <div class="small text-muted">Recovery %: ${plan.recoveryPct !== null ? plan.recoveryPct.toFixed(1) + '%' : '--'}</div>
+        </div>
+        <div class="fw-semibold mb-2">Recovery Trades</div>
+        <div class="d-flex flex-column">${legs || '<div class="text-muted small">No recovery trades added.</div>'}</div>
+      `;
+    };
+
+    const updateRecoveryKpis = (rows: RecoveryPlanSummary[]) => {
+      const active = rows.filter((plan) => plan.status === 'ACTIVE').length;
+      const recovered = rows.filter((plan) => plan.isRecovered).length;
+      const totalLoss = rows.reduce((sum, plan) => sum + plan.lossAmount, 0);
+      const totalRecovered = rows.reduce((sum, plan) => sum + plan.recoveredAmount, 0);
+      const netRecovery = totalRecovered - totalLoss;
+      const winPct = rows.length ? (recovered / rows.length) * 100 : null;
+      recoveryActive.textContent = String(active);
+      recoveryRecovered.textContent = String(recovered);
+      recoveryWin.textContent = winPct === null ? '--' : `${winPct.toFixed(0)}%`;
+      recoveryNet.textContent = netRecovery >= 0 ? formatMoney(netRecovery) : `-${formatMoney(Math.abs(netRecovery))}`;
+      recoverySummaryUpdated.textContent = `Updated: ${formatDateTime(new Date().toISOString())}`;
+    };
+
+    const renderRecoveryLegs = () => {
+      if (!recoveryDraft.legs.length) {
+        recoveryLegsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No recovery trades yet.</td></tr>';
+        return;
+      }
+      recoveryLegsBody.innerHTML = recoveryDraft.legs
+        .map((leg) => {
+          return `
+            <tr data-leg-id="${leg.id}">
+              <td><input class="form-control form-control-sm" data-field="symbol" value="${leg.symbol || ''}" /></td>
+              <td><input class="form-control form-control-sm" data-field="quantity" type="number" min="1" step="1" value="${leg.quantity || ''}" /></td>
+              <td><input class="form-control form-control-sm" data-field="buyPrice" type="number" min="0" step="0.01" value="${leg.buyPrice || ''}" /></td>
+              <td class="text-muted">${formatMoney(leg.investedAmount || leg.quantity * leg.buyPrice)}</td>
+              <td class="text-end">
+                <button class="btn btn-sm btn-outline-danger" data-action="remove-leg">Remove</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+    };
+
+    const renderRecoveryLosses = () => {
+      if (!recoveryDraft.lossTrades.length) {
+        recoveryLossBody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">No loss trades added.</td></tr>';
+      } else {
+        recoveryLossBody.innerHTML = recoveryDraft.lossTrades
+          .map((leg) => {
+            return `
+              <tr data-loss-id="${leg.id}">
+                <td class="fw-semibold">${leg.symbol}</td>
+                <td>${leg.quantity}</td>
+                <td>${formatMoney(leg.sellPrice)}</td>
+                <td class="text-danger">${formatMoney(leg.lossAmount)}</td>
+                <td class="text-end">
+                  <button class="btn btn-sm btn-outline-danger" data-action="remove-loss">Remove</button>
+                </td>
+              </tr>
+            `;
+          })
+          .join('');
+      }
+      const totalLoss = recoveryDraft.lossTrades.reduce((sum, leg) => sum + (leg.lossAmount || 0), 0);
+      recoveryLossAmount.textContent = formatMoney(totalLoss);
+      recoveryLossCount.textContent = String(recoveryDraft.lossTrades.length);
+      if (recoveryDraft.lossTrades.length === 1) {
+        const loss = recoveryDraft.lossTrades[0];
+        recoveryLossMeta.textContent = `Sold at ${formatMoney(loss.sellPrice)} on ${formatDate(loss.tradeDate)}`;
+      } else {
+        recoveryLossMeta.textContent = `Linked loss trades: ${recoveryDraft.lossTrades.length}`;
+      }
+      recoveryDraftLossAmount = totalLoss;
+      recoveryDraftHoldDays = recoveryDraft.lossTrades.length
+        ? recoveryDraft.lossTrades.reduce((sum, leg) => sum + (leg.holdDays || 0), 0) / recoveryDraft.lossTrades.length
+        : null;
+    };
+
+    const refreshLossTradeOptions = () => {
+      const sellTrades = trades.filter((trade) => trade.side === 'SELL');
+      const usedLossIds = new Set(recoveryDraft.lossTrades.map((leg) => leg.tradeId).filter(Boolean));
+      const blockedLossIds = new Set(linkedLossTradeIds);
+      if (recoveryDraft.planId) {
+        const currentPlan = recoveryPlans.find((plan) => plan.id === recoveryDraft.planId);
+        if (currentPlan) {
+          normalizeLossTrades(currentPlan).forEach((leg) => {
+            if (leg.tradeId) {
+              blockedLossIds.delete(leg.tradeId);
+            }
+          });
+        }
+      }
+      usedLossIds.forEach((id) => blockedLossIds.delete(id));
+      const options = sellTrades
+        .map((trade) => ({
+          trade,
+          snapshot: computeLossSnapshot(trade)
+        }))
+        .filter(
+          ({ trade, snapshot }) =>
+            snapshot.lossAmount > 0 && !usedLossIds.has(trade.id) && !blockedLossIds.has(trade.id)
+        )
+        .map(({ trade }) => {
+          return `<option value="${trade.id}">${trade.symbol} - ${trade.quantity} @ ${formatMoney(trade.price)} (${formatDate(trade.tradeDate)})</option>`;
+        })
+        .join('');
+      recoveryLossTrade.innerHTML = '<option value="">Add from SELL trade...</option>' + options;
+    };
+
+    const openRecoveryModal = (lossTrade: TradeRecord | null, plan?: RecoveryPlan) => {
+      const normalizedLossTrades = plan ? normalizeLossTrades(plan) : [];
+      if (!plan) {
+        if (!lossTrade) {
+          showAlert(feedback, 'warning', 'Select a loss trade first.');
+          return;
+        }
+        const snapshot = computeLossSnapshot(lossTrade);
+        normalizedLossTrades.push({
+          id: crypto.randomUUID(),
+          tradeId: lossTrade.id,
+          symbol: lossTrade.symbol,
+          quantity: lossTrade.quantity,
+          sellPrice: lossTrade.price,
+          lossAmount: snapshot.lossAmount,
+          tradeDate: lossTrade.tradeDate,
+          holdDays: snapshot.holdDays,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      }
+
+      recoveryDraft = {
+        planId: plan?.id,
+        lossTrades: normalizedLossTrades,
+        legs: plan?.recoveryTrades ? plan.recoveryTrades.map((leg) => ({ ...leg })) : []
+      };
+
+      recoveryModalTitle.textContent = plan ? 'Edit Recovery Plan' : 'Create Recovery Plan';
+      recoveryLossMeta.textContent = plan
+        ? `Linked loss trades: ${normalizedLossTrades.length}`
+        : `Sold at ${formatMoney(lossTrade.price)} on ${formatDate(lossTrade.tradeDate)}`;
+      recoveryNotes.value = plan?.notes ?? '';
+
+      refreshLossTradeOptions();
+
+      const buyTrades = trades.filter((trade) => trade.side === 'BUY');
+      recoveryLegTrade.innerHTML =
+        '<option value="">Add from BUY trade...</option>' +
+        buyTrades
+          .map((trade) => {
+            return `<option value="${trade.id}">${trade.symbol} • ${trade.quantity} @ ${formatMoney(trade.price)} (${formatDate(trade.tradeDate)})</option>`;
+          })
+          .join('');
+
+      renderRecoveryLosses();
+      renderRecoveryLegs();
+      recoveryModal.classList.add('show');
+      recoveryModal.setAttribute('aria-hidden', 'false');
+    };
+
+    const closeRecoveryModal = () => {
+      recoveryModal.classList.remove('show');
+      recoveryModal.setAttribute('aria-hidden', 'true');
+      recoveryDraft = { legs: [], lossTrades: [] };
+    };
+
     let mappingReviewResolver: ((value: { expected: string; note: string } | null) => void) | null = null;
 
     const closeMappingReview = (result: { expected: string; note: string } | null) => {
@@ -2035,6 +2720,204 @@ export function renderTradesView(root: HTMLElement): void {
         mappingReviewExpected.focus();
       });
 
+    recoveryModal.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target?.dataset?.close === 'recovery') {
+        closeRecoveryModal();
+      }
+    });
+    recoveryModalClose.addEventListener('click', closeRecoveryModal);
+    recoveryCancel.addEventListener('click', closeRecoveryModal);
+
+    recoveryLossAdd.addEventListener('click', () => {
+      const tradeId = recoveryLossTrade.value;
+      if (!tradeId) return;
+      const trade = trades.find((item) => item.id === tradeId);
+      if (!trade) return;
+      const snapshot = computeLossSnapshot(trade);
+      if (snapshot.lossAmount <= 0) {
+        showAlert(feedback, 'warning', 'This sell trade does not have a loss to recover.');
+        return;
+      }
+      const now = new Date().toISOString();
+      recoveryDraft.lossTrades.push({
+        id: crypto.randomUUID(),
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        quantity: trade.quantity,
+        sellPrice: trade.price,
+        lossAmount: snapshot.lossAmount,
+        tradeDate: trade.tradeDate,
+        holdDays: snapshot.holdDays,
+        createdAt: now,
+        updatedAt: now
+      });
+      renderRecoveryLosses();
+      refreshLossTradeOptions();
+      recoveryLossTrade.value = '';
+    });
+
+    recoveryLossBody.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.dataset.action !== 'remove-loss') return;
+      const row = target.closest<HTMLTableRowElement>('tr');
+      if (!row) return;
+      const lossId = row.dataset.lossId || '';
+      recoveryDraft.lossTrades = recoveryDraft.lossTrades.filter((leg) => leg.id !== lossId);
+      renderRecoveryLosses();
+      refreshLossTradeOptions();
+    });
+
+    recoveryLegAdd.addEventListener('click', () => {
+      const tradeId = recoveryLegTrade.value;
+      if (!tradeId) return;
+      const trade = trades.find((item) => item.id === tradeId);
+      if (!trade) return;
+      const now = new Date().toISOString();
+      recoveryDraft.legs.push({
+        id: crypto.randomUUID(),
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        quantity: trade.quantity,
+        buyPrice: trade.price,
+        investedAmount: trade.quantity * trade.price,
+        createdAt: now,
+        updatedAt: now
+      });
+      renderRecoveryLegs();
+      recoveryLegTrade.value = '';
+    });
+
+    recoveryLegAddManual.addEventListener('click', () => {
+      const now = new Date().toISOString();
+      recoveryDraft.legs.push({
+        id: crypto.randomUUID(),
+        symbol: '',
+        quantity: 1,
+        buyPrice: 0,
+        investedAmount: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+      renderRecoveryLegs();
+    });
+
+    recoveryLegsBody.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const button = target.closest<HTMLButtonElement>('[data-action="remove-leg"]');
+      if (!button) return;
+      const row = button.closest<HTMLTableRowElement>('tr[data-leg-id]');
+      if (!row) return;
+      const legId = row.dataset.legId || '';
+      recoveryDraft.legs = recoveryDraft.legs.filter((leg) => leg.id !== legId);
+      renderRecoveryLegs();
+    });
+
+    recoveryLegsBody.addEventListener('input', (event) => {
+      const target = event.target as HTMLInputElement | null;
+      if (!target) return;
+      const row = target.closest<HTMLTableRowElement>('tr[data-leg-id]');
+      if (!row) return;
+      const legId = row.dataset.legId || '';
+      const field = target.dataset.field as 'symbol' | 'quantity' | 'buyPrice' | undefined;
+      if (!field) return;
+      const leg = recoveryDraft.legs.find((item) => item.id === legId);
+      if (!leg) return;
+      if (field === 'symbol') {
+        leg.symbol = normalizeSymbol(target.value);
+      } else if (field === 'quantity') {
+        leg.quantity = Number(target.value || 0);
+      } else if (field === 'buyPrice') {
+        leg.buyPrice = Number(target.value || 0);
+      }
+      leg.investedAmount = (leg.quantity || 0) * (leg.buyPrice || 0);
+      leg.updatedAt = new Date().toISOString();
+      renderRecoveryLegs();
+    });
+
+    recoverySave.addEventListener('click', async () => {
+      if (!recoveryDraft.lossTrades.length) {
+        showAlert(feedback, 'warning', 'Select at least one loss trade first.');
+        return;
+      }
+      if (!recoveryDraft.legs.length) {
+        showAlert(feedback, 'warning', 'Add at least one recovery trade.');
+        return;
+      }
+      const invalidLeg = recoveryDraft.legs.find((leg) => !leg.symbol || !(leg.quantity > 0) || !(leg.buyPrice > 0));
+      if (invalidLeg) {
+        showAlert(feedback, 'warning', 'Each recovery trade needs symbol, qty, and buy price.');
+        return;
+      }
+      const now = new Date().toISOString();
+      const normalizedLossTrades = recoveryDraft.lossTrades.map((leg) => ({
+        ...leg,
+        createdAt: leg.createdAt || now,
+        updatedAt: now
+      }));
+      const primaryLoss = normalizedLossTrades[0];
+      const plan: RecoveryPlan = {
+        id: recoveryDraft.planId || crypto.randomUUID(),
+        userId: session.userId,
+        status: recoveryDraft.planId
+          ? recoveryPlans.find((item) => item.id === recoveryDraft.planId)?.status || 'ACTIVE'
+          : 'ACTIVE',
+        lossTradeId: primaryLoss.tradeId,
+        lossSymbol: primaryLoss.symbol,
+        lossQuantity: primaryLoss.quantity,
+        lossSellPrice: primaryLoss.sellPrice,
+        lossAmount: recoveryDraftLossAmount,
+        lossTradeDate: primaryLoss.tradeDate,
+        lossHoldDays: recoveryDraftHoldDays,
+        lossTrades: normalizedLossTrades,
+        recoveryTrades: recoveryDraft.legs.map((leg) => ({
+          ...leg,
+          investedAmount: leg.investedAmount || leg.quantity * leg.buyPrice,
+          createdAt: leg.createdAt || now,
+          updatedAt: now
+        })),
+        notes: recoveryNotes.value.trim() || undefined,
+        createdAt: recoveryDraft.planId
+          ? recoveryPlans.find((item) => item.id === recoveryDraft.planId)?.createdAt || now
+          : now,
+        updatedAt: now,
+        closedAt: recoveryDraft.planId
+          ? recoveryPlans.find((item) => item.id === recoveryDraft.planId)?.closedAt || null
+          : null
+      };
+      try {
+        if (recoveryDraft.planId) {
+          const updates: Partial<Omit<RecoveryPlan, 'id' | 'userId' | 'createdAt'>> = {
+            status: plan.status,
+            lossTradeId: plan.lossTradeId,
+            lossSymbol: plan.lossSymbol,
+            lossQuantity: plan.lossQuantity,
+            lossSellPrice: plan.lossSellPrice,
+            lossAmount: plan.lossAmount,
+            lossTradeDate: plan.lossTradeDate,
+            lossHoldDays: plan.lossHoldDays,
+            lossTrades: plan.lossTrades,
+            recoveryTrades: plan.recoveryTrades,
+            notes: plan.notes,
+            updatedAt: plan.updatedAt,
+            closedAt: plan.closedAt
+          };
+          await updateRecoveryPlan(plan.id, session.userId, updates);
+          showAlert(feedback, 'success', 'Recovery plan updated.');
+        } else {
+          await addRecoveryPlan(plan);
+          showAlert(feedback, 'success', 'Recovery plan created.');
+        }
+        closeRecoveryModal();
+        await refreshData();
+        await queueAndSync();
+      } catch (error) {
+        showAlert(feedback, 'danger', toErrorMessage(error));
+      }
+    });
+
     const requestMappingReview = async (symbol: string): Promise<boolean> => {
       const companyName = importConfidence[symbol]?.companyName || '';
       const result = await openMappingReviewModal({ symbol, companyName });
@@ -2065,8 +2948,8 @@ export function renderTradesView(root: HTMLElement): void {
 
     const refreshList = () => {
       const filtered = applyFilters(trades, filters);
-      tradeTableBody.innerHTML = renderTableRows(filtered);
-      tradeCardList.innerHTML = renderCardRows(filtered);
+      tradeTableBody.innerHTML = renderTableRows(filtered, linkedLossTradeIds);
+      tradeCardList.innerHTML = renderCardRows(filtered, linkedLossTradeIds);
       tradeCount.textContent = `${filtered.length} of ${trades.length} trades`;
     };
 
@@ -2093,6 +2976,16 @@ export function renderTradesView(root: HTMLElement): void {
       renderTickerRows(sorted);
       updateSortIcons();
       renderRequestRows(tickerRequests);
+
+      recoveryRows = buildRecoverySummaries(recoveryPlans, priceMap);
+      updateRecoveryKpis(recoveryRows);
+      renderRecoveryRows(recoveryRows);
+      const selected =
+        (activeRecoveryPlanId && recoveryRows.find((plan) => plan.id === activeRecoveryPlanId)) || recoveryRows[0] || null;
+      if (selected) {
+        activeRecoveryPlanId = selected.id;
+      }
+      renderRecoveryDetail(selected || null);
     };
 
     const applyReviewApprovals = async (list: TradeRecord[], requests: TickerRequest[]) => {
@@ -2131,17 +3024,20 @@ export function renderTradesView(root: HTMLElement): void {
     };
 
     const refreshData = async () => {
-      const [list, masterRows, requests, settings] = await Promise.all([
+      const [list, masterRows, requests, settings, recoveryList] = await Promise.all([
         listTrades(session.userId),
         listNseMasterForUser(session.userId),
         listTickerRequests(session.userId),
-        getUserSettings(session.userId)
+        getUserSettings(session.userId),
+        listRecoveryPlans(session.userId)
       ]);
       trades = list;
       nseMasterRows = masterRows;
       nseSymbols = new Set(masterRows.map((row) => normalizeSymbol(row.symbol)));
       tickerRequests = requests;
       userSettings = settings;
+      recoveryPlans = recoveryList;
+      linkedLossTradeIds = buildLinkedLossTradeIds(recoveryPlans);
       const reviewChanged = await applyReviewApprovals(trades, tickerRequests);
       importConfidence = loadImportConfidence();
       tickerRequests
@@ -2248,6 +3144,23 @@ export function renderTradesView(root: HTMLElement): void {
         openModal(trade);
         return;
       }
+      if (action === 'recover') {
+        if (trade.side !== 'SELL') {
+          showAlert(feedback, 'warning', 'Recovery plans can be created from SELL trades only.');
+          return;
+        }
+        if (linkedLossTradeIds.has(trade.id)) {
+          showAlert(feedback, 'warning', 'This sell trade is already linked to a recovery plan.');
+          return;
+        }
+        const lossSnapshot = computeLossSnapshot(trade);
+        if (lossSnapshot.lossAmount <= 0) {
+          showAlert(feedback, 'warning', 'This sell trade does not have a loss to recover.');
+          return;
+        }
+        openRecoveryModal(trade);
+        return;
+      }
       if (action === 'delete') {
         const ok = await confirmAction({
           title: 'Delete Trade',
@@ -2287,6 +3200,23 @@ export function renderTradesView(root: HTMLElement): void {
         openModal(trade);
         return;
       }
+      if (action === 'recover') {
+        if (trade.side !== 'SELL') {
+          showAlert(feedback, 'warning', 'Recovery plans can be created from SELL trades only.');
+          return;
+        }
+        if (linkedLossTradeIds.has(trade.id)) {
+          showAlert(feedback, 'warning', 'This sell trade is already linked to a recovery plan.');
+          return;
+        }
+        const lossSnapshot = computeLossSnapshot(trade);
+        if (lossSnapshot.lossAmount <= 0) {
+          showAlert(feedback, 'warning', 'This sell trade does not have a loss to recover.');
+          return;
+        }
+        openRecoveryModal(trade);
+        return;
+      }
       if (action === 'delete') {
         const ok = await confirmAction({
           title: 'Delete Trade',
@@ -2296,6 +3226,59 @@ export function renderTradesView(root: HTMLElement): void {
         });
         if (!ok) return;
         await deleteTrade(trade.id, session.userId);
+        await refreshData();
+        await queueAndSync();
+      }
+    });
+
+    recoveryBody.addEventListener('click', async (event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const actionButton = target.closest<HTMLButtonElement>('[data-action]');
+      if (!actionButton) return;
+      const action = actionButton.dataset.action;
+      const row = actionButton.closest<HTMLTableRowElement>('tr[data-plan-id]');
+      if (!row) return;
+      const planId = row.dataset.planId || '';
+      if (!planId) return;
+      const plan = recoveryPlans.find((item) => item.id === planId);
+      if (!plan) return;
+
+      if (action === 'view-plan') {
+        activeRecoveryPlanId = plan.id;
+        const detailPlan = recoveryRows.find((item) => item.id === plan.id) || null;
+        renderRecoveryDetail(detailPlan);
+        return;
+      }
+      if (action === 'edit-plan') {
+        const lossTrade = getLossTradeForPlan(plan);
+        openRecoveryModal(lossTrade, plan);
+        return;
+      }
+      if (action === 'close-plan') {
+        const ok = await confirmAction({
+          title: 'Close Recovery Plan',
+          message: 'Close this recovery plan? You can still view it later.',
+          confirmLabel: 'Close'
+        });
+        if (!ok) return;
+        await updateRecoveryPlan(plan.id, session.userId, {
+          status: 'CLOSED',
+          closedAt: new Date().toISOString()
+        });
+        await refreshData();
+        await queueAndSync();
+        return;
+      }
+      if (action === 'delete-plan') {
+        const ok = await confirmAction({
+          title: 'Delete Recovery Plan',
+          message: 'Delete this recovery plan? This cannot be undone.',
+          confirmLabel: 'Delete',
+          tone: 'danger'
+        });
+        if (!ok) return;
+        await deleteRecoveryPlan(plan.id, session.userId);
         await refreshData();
         await queueAndSync();
       }
@@ -2584,4 +3567,5 @@ export function renderTradesView(root: HTMLElement): void {
     await refreshData();
   })();
 }
+
 

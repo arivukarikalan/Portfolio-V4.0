@@ -1,10 +1,21 @@
 import * as XLSX from 'xlsx';
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert } from '../ui/feedback';
-import type { GoalPlan, RecurrenceFrequency, TradeRecord, TradeSide, TransactionRecord, UserSettings } from '../core/types';
+import type {
+  GoalPlan,
+  RecurrenceFrequency,
+  RecoveryLeg,
+  RecoveryLossLeg,
+  RecoveryPlan,
+  TradeRecord,
+  TradeSide,
+  TransactionRecord,
+  UserSettings
+} from '../core/types';
 import { listTrades, replaceTradesForUser } from '../storage/trades';
 import { listTransactions, replaceTransactionsForUser } from '../storage/transactions';
 import { listGoals, replaceGoalsForUser } from '../storage/goals';
+import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recoveryPlans';
 import { deleteUserSettings, getUserSettings, saveUserSettings } from '../storage/settings';
 import { queueSnapshot } from '../services/cloudSync';
 import { requireSession } from './guards';
@@ -166,7 +177,9 @@ export function renderSettingsView(root: HTMLElement): void {
                   <button class="btn btn-outline-secondary" id="settings-import">Import Excel</button>
                   <input class="d-none" type="file" id="settings-import-file" accept=".xlsx,.xls" />
                 </div>
-                <div class="text-muted small mt-2">Sheets: Trades, Transactions, Recurring, Goals, Settings</div>
+                <div class="text-muted small mt-2">
+                  Sheets: Trades, Transactions, Recurring, Goals, RecoveryPlans, RecoveryLegs, RecoveryLossLegs, Settings
+                </div>
               </div>
             </div>
           </div>
@@ -438,6 +451,10 @@ export function renderSettingsView(root: HTMLElement): void {
       recurringPresent: boolean;
       goals: GoalPlan[];
       goalsPresent: boolean;
+      recoveryPlans: RecoveryPlan[];
+      recoveryPlansPresent: boolean;
+      recoveryLossLegs: Array<RecoveryLossLeg & { planId: string }>;
+      recoveryLossLegsPresent: boolean;
       settings: Partial<UserSettings> | null;
       settingsPresent: boolean;
     };
@@ -532,6 +549,71 @@ export function renderSettingsView(root: HTMLElement): void {
         })
         .filter((row) => row.name);
 
+    const parseRecoveryPlanRows = (rows: Record<string, unknown>[]): RecoveryPlan[] =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          const status = readString(row.status) === 'CLOSED' ? 'CLOSED' : 'ACTIVE';
+          return {
+            id,
+            userId: session.userId,
+            status: status as RecoveryPlan['status'],
+            lossTradeId: readString(row.lossTradeId) || undefined,
+            lossSymbol: readString(row.lossSymbol),
+            lossQuantity: readNumber(row.lossQuantity),
+            lossSellPrice: readNumber(row.lossSellPrice),
+            lossAmount: readNumber(row.lossAmount),
+            lossTradeDate: normalizeDate(row.lossTradeDate),
+            lossHoldDays: readOptionalNumber(row.lossHoldDays),
+            recoveryTrades: [],
+            notes: readString(row.notes) || undefined,
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt),
+            closedAt: readString(row.closedAt) || null
+          } as RecoveryPlan;
+        })
+        .filter((row) => row.lossSymbol && row.lossTradeDate);
+
+    const parseRecoveryLossRows = (
+      rows: Record<string, unknown>[]
+    ): Array<RecoveryLossLeg & { planId: string }> =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          return {
+            id,
+            planId: readString(row.planId),
+            tradeId: readString(row.tradeId) || undefined,
+            symbol: readString(row.symbol),
+            quantity: readNumber(row.quantity),
+            sellPrice: readNumber(row.sellPrice),
+            lossAmount: readNumber(row.lossAmount),
+            tradeDate: normalizeDate(row.tradeDate),
+            holdDays: readOptionalNumber(row.holdDays),
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt)
+          } as RecoveryLossLeg & { planId: string };
+        })
+        .filter((row) => row.planId && row.symbol);
+
+    const parseRecoveryLegRows = (rows: Record<string, unknown>[]): Array<RecoveryLeg & { planId: string }> =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          return {
+            id,
+            planId: readString(row.planId),
+            tradeId: readString(row.tradeId) || undefined,
+            symbol: readString(row.symbol),
+            quantity: readNumber(row.quantity),
+            buyPrice: readNumber(row.buyPrice),
+            investedAmount: readNumber(row.investedAmount),
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt)
+          };
+        })
+        .filter((row) => row.planId && row.symbol);
+
     const parseSettingsRow = (rows: Record<string, unknown>[]): Partial<UserSettings> | null => {
       if (!rows.length) return null;
       const row = rows[0] || {};
@@ -571,6 +653,9 @@ export function renderSettingsView(root: HTMLElement): void {
       const transactionsSheet = workbook.Sheets['Transactions'];
       const recurringSheet = workbook.Sheets['Recurring'];
       const goalsSheet = workbook.Sheets['Goals'];
+      const recoveryPlansSheet = workbook.Sheets['RecoveryPlans'];
+      const recoveryLegsSheet = workbook.Sheets['RecoveryLegs'];
+      const recoveryLossSheet = workbook.Sheets['RecoveryLossLegs'];
       const settingsSheet = workbook.Sheets['Settings'];
 
       const tradesRows = tradesSheet ? (XLSX.utils.sheet_to_json(tradesSheet, { defval: '' }) as Record<string, unknown>[]) : [];
@@ -581,9 +666,45 @@ export function renderSettingsView(root: HTMLElement): void {
         ? (XLSX.utils.sheet_to_json(recurringSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
       const goalRows = goalsSheet ? (XLSX.utils.sheet_to_json(goalsSheet, { defval: '' }) as Record<string, unknown>[]) : [];
+      const recoveryPlanRows = recoveryPlansSheet
+        ? (XLSX.utils.sheet_to_json(recoveryPlansSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
+      const recoveryLegRows = recoveryLegsSheet
+        ? (XLSX.utils.sheet_to_json(recoveryLegsSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
+      const recoveryLossRows = recoveryLossSheet
+        ? (XLSX.utils.sheet_to_json(recoveryLossSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
       const settingsRows = settingsSheet
         ? (XLSX.utils.sheet_to_json(settingsSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
+
+      const plans = parseRecoveryPlanRows(recoveryPlanRows);
+      const legs = parseRecoveryLegRows(recoveryLegRows);
+      const lossLegs = parseRecoveryLossRows(recoveryLossRows);
+      if (legs.length && plans.length) {
+        const map = new Map(plans.map((plan) => [plan.id, plan]));
+        legs.forEach((leg) => {
+          const plan = map.get(leg.planId);
+          if (plan) {
+            const { planId: _planId, ...rest } = leg;
+            plan.recoveryTrades.push(rest);
+          }
+        });
+      }
+      if (lossLegs.length && plans.length) {
+        const map = new Map(plans.map((plan) => [plan.id, plan]));
+        lossLegs.forEach((leg) => {
+          const plan = map.get(leg.planId);
+          if (plan) {
+            const { planId: _planId, ...rest } = leg;
+            if (!plan.lossTrades) {
+              plan.lossTrades = [];
+            }
+            plan.lossTrades.push(rest);
+          }
+        });
+      }
 
       return {
         trades: parseTradeRows(tradesRows),
@@ -594,6 +715,10 @@ export function renderSettingsView(root: HTMLElement): void {
         recurringPresent: Boolean(recurringSheet),
         goals: parseGoalRows(goalRows),
         goalsPresent: Boolean(goalsSheet),
+        recoveryPlans: plans,
+        recoveryPlansPresent: Boolean(recoveryPlansSheet || recoveryLegsSheet || recoveryLossSheet),
+        recoveryLossLegs: lossLegs,
+        recoveryLossLegsPresent: Boolean(recoveryLossSheet),
         settings: parseSettingsRow(settingsRows),
         settingsPresent: Boolean(settingsSheet)
       };
@@ -615,6 +740,15 @@ export function renderSettingsView(root: HTMLElement): void {
         } else {
           const existing = await listGoals(session.userId);
           await replaceGoalsForUser(session.userId, mergeById(existing, bundle.goals));
+        }
+      }
+
+      if (bundle.recoveryPlansPresent) {
+        if (mode === 'replace') {
+          await replaceRecoveryPlansForUser(session.userId, bundle.recoveryPlans);
+        } else {
+          const existing = await listRecoveryPlans(session.userId);
+          await replaceRecoveryPlansForUser(session.userId, mergeById(existing, bundle.recoveryPlans));
         }
       }
 
@@ -657,6 +791,8 @@ export function renderSettingsView(root: HTMLElement): void {
           <div>Transactions: ${bundle.transactions.length}</div>
           <div>Recurring: ${bundle.recurring.length}</div>
           <div>Goals: ${bundle.goals.length}</div>
+          <div>Recovery Plans: ${bundle.recoveryPlans.length}</div>
+          <div>Recovery Loss Legs: ${bundle.recoveryLossLegs.length}</div>
           <div>Settings: ${settingsCount}</div>
         </div>
       `;
@@ -667,10 +803,11 @@ export function renderSettingsView(root: HTMLElement): void {
       const label = exportBtn.textContent || 'Export Excel';
       setBusy(exportBtn, true, label);
       try {
-        const [trades, transactions, goals, settings] = await Promise.all([
+        const [trades, transactions, goals, recoveryPlans, settings] = await Promise.all([
           listTrades(session.userId),
           listTransactions(session.userId),
           listGoals(session.userId),
+          listRecoveryPlans(session.userId),
           getUserSettings(session.userId)
         ]);
         const history = transactions.filter((row) => !row.isTemplate);
@@ -744,6 +881,69 @@ export function renderSettingsView(root: HTMLElement): void {
           createdAt: goal.createdAt,
           updatedAt: goal.updatedAt
         }));
+
+        const recoveryPlanRows = recoveryPlans.map((plan) => ({
+          id: plan.id,
+          status: plan.status,
+          lossTradeId: plan.lossTradeId ?? '',
+          lossSymbol: plan.lossSymbol,
+          lossQuantity: plan.lossQuantity,
+          lossSellPrice: plan.lossSellPrice,
+          lossAmount: plan.lossAmount,
+          lossTradeDate: plan.lossTradeDate,
+          lossHoldDays: plan.lossHoldDays ?? '',
+          notes: plan.notes ?? '',
+          createdAt: plan.createdAt,
+          updatedAt: plan.updatedAt,
+          closedAt: plan.closedAt ?? ''
+        }));
+
+        const recoveryLegRows = recoveryPlans.flatMap((plan) =>
+          plan.recoveryTrades.map((leg) => ({
+            id: leg.id,
+            planId: plan.id,
+            tradeId: leg.tradeId ?? '',
+            symbol: leg.symbol,
+            quantity: leg.quantity,
+            buyPrice: leg.buyPrice,
+            investedAmount: leg.investedAmount,
+            createdAt: leg.createdAt,
+            updatedAt: leg.updatedAt
+          }))
+        );
+
+        const recoveryLossRows = recoveryPlans.flatMap((plan) => {
+          const lossTrades =
+            plan.lossTrades && plan.lossTrades.length
+              ? plan.lossTrades
+              : [
+                  {
+                    id: plan.lossTradeId || `${plan.id}-loss`,
+                    tradeId: plan.lossTradeId,
+                    symbol: plan.lossSymbol,
+                    quantity: plan.lossQuantity,
+                    sellPrice: plan.lossSellPrice,
+                    lossAmount: plan.lossAmount,
+                    tradeDate: plan.lossTradeDate,
+                    holdDays: plan.lossHoldDays ?? null,
+                    createdAt: plan.createdAt,
+                    updatedAt: plan.updatedAt
+                  }
+                ];
+          return lossTrades.map((leg) => ({
+            id: leg.id,
+            planId: plan.id,
+            tradeId: leg.tradeId ?? '',
+            symbol: leg.symbol,
+            quantity: leg.quantity,
+            sellPrice: leg.sellPrice,
+            lossAmount: leg.lossAmount,
+            tradeDate: leg.tradeDate,
+            holdDays: leg.holdDays ?? '',
+            createdAt: leg.createdAt,
+            updatedAt: leg.updatedAt
+          }));
+        });
 
         const settingsRows = [
           {
@@ -846,6 +1046,57 @@ export function renderSettingsView(root: HTMLElement): void {
         );
         XLSX.utils.book_append_sheet(
           wb,
+          makeSheet(recoveryPlanRows, [
+            'id',
+            'status',
+            'lossTradeId',
+            'lossSymbol',
+            'lossQuantity',
+            'lossSellPrice',
+            'lossAmount',
+            'lossTradeDate',
+            'lossHoldDays',
+            'notes',
+            'createdAt',
+            'updatedAt',
+            'closedAt'
+          ]),
+          'RecoveryPlans'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(recoveryLegRows, [
+            'id',
+            'planId',
+            'tradeId',
+            'symbol',
+            'quantity',
+            'buyPrice',
+            'investedAmount',
+            'createdAt',
+            'updatedAt'
+          ]),
+          'RecoveryLegs'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(recoveryLossRows, [
+            'id',
+            'planId',
+            'tradeId',
+            'symbol',
+            'quantity',
+            'sellPrice',
+            'lossAmount',
+            'tradeDate',
+            'holdDays',
+            'createdAt',
+            'updatedAt'
+          ]),
+          'RecoveryLossLegs'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
           makeSheet(settingsRows, [
             'totalInvestment',
             'maxAllocationPct',
@@ -893,6 +1144,8 @@ export function renderSettingsView(root: HTMLElement): void {
           pendingImport.transactionsPresent ||
           pendingImport.recurringPresent ||
           pendingImport.goalsPresent ||
+          pendingImport.recoveryPlansPresent ||
+          pendingImport.recoveryLossLegsPresent ||
           pendingImport.settingsPresent;
         if (!hasAnySheet) {
           pendingImport = null;
