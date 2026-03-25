@@ -17,7 +17,8 @@ export default defineConfig({
         transactions: resolve(__dirname, 'transactions.html'),
         finance: resolve(__dirname, 'finance.html'),
         pnl: resolve(__dirname, 'pnl.html'),
-        settings: resolve(__dirname, 'settings.html')
+        settings: resolve(__dirname, 'settings.html'),
+        help: resolve(__dirname, 'help.html')
       }
     }
   }
