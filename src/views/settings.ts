@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { renderShell, bindShell } from '../ui/shell';
-import { clearAlert, setBusy, showAlert } from '../ui/feedback';
+import { clearAlert, setBusy, showAlert, flashInline } from '../ui/feedback';
 import type {
   GoalPlan,
   RecurrenceFrequency,
@@ -420,6 +420,7 @@ export function renderSettingsView(root: HTMLElement): void {
         await queueSnapshot(session.userId);
         await loadSettings();
         showAlert(feedback, 'success', 'Settings saved.');
+        flashInline(saveBtn, 'Saved');
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {

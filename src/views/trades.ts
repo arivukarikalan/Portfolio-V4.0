@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import Chart from 'chart.js/auto';
 import type { Chart as ChartJS, ChartConfiguration, ChartDataset, ScriptableLineSegmentContext } from 'chart.js';
 import { renderShell, bindShell } from '../ui/shell';
-import { clearAlert, setBusy, showAlert } from '../ui/feedback';
+import { clearAlert, setBusy, showAlert, flashInline } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
 import { renderConfirmModal, bindConfirmModal } from '../ui/confirm';
 import { addTrade, deleteTrade, listTrades, updateTrade, type TradeInput } from '../storage/trades';
@@ -577,7 +577,15 @@ async function parseTradeFile(file: File, userId: string): Promise<CsvAnalysis> 
 
 function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
-    return '<tr><td colspan="7" class="text-muted text-center py-3">No trades yet.</td></tr>';
+    return `
+      <tr>
+        <td colspan="7" class="text-center py-4">
+          <div class="fw-semibold mb-1">No trades yet.</div>
+          <div class="text-muted small mb-2">Import your broker tradebook to get started.</div>
+          <a class="btn btn-sm btn-outline-primary" href="trades.html#import">Import trades</a>
+        </td>
+      </tr>
+    `;
   }
 
   const display = groupTradesForDisplay(trades);
@@ -657,7 +665,13 @@ function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> 
 
 function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
-    return '<div class="text-muted text-center py-3">No trades yet.</div>';
+    return `
+      <div class="text-center py-4">
+        <div class="fw-semibold mb-1">No trades yet.</div>
+        <div class="text-muted small mb-2">Import your broker tradebook to get started.</div>
+        <a class="btn btn-sm btn-outline-primary" href="trades.html#import">Import trades</a>
+      </div>
+    `;
   }
 
   const display = groupTradesForDisplay(trades);
@@ -918,7 +932,7 @@ export function renderTradesView(root: HTMLElement): void {
           </div>
           <div class="d-flex flex-wrap gap-2">
             <button class="btn btn-primary" id="trade-add">${lucideIcon('plus')} Add Trade</button>
-            <label class="btn btn-outline-secondary mb-0">
+            <label class="btn btn-outline-secondary mb-0" id="trade-import-label">
               ${lucideIcon('upload')} Import File
               <input type="file" id="trade-import" accept=".csv,.xlsx,.xls" hidden />
             </label>
@@ -1082,7 +1096,7 @@ export function renderTradesView(root: HTMLElement): void {
         <section class="trade-tab d-none" data-trade-panel="history">
           <div class="card shadow-sm border-0 mb-3">
             <div class="card-body">
-              <div class="row g-2 align-items-end mb-3">
+              <div class="row g-2 align-items-end mb-3 trade-filter-bar">
                 <div class="col-12 col-md-4">
                   <label class="form-label small text-muted">Search</label>
                   <div class="input-group input-group-sm">
@@ -1621,6 +1635,7 @@ export function renderTradesView(root: HTMLElement): void {
     const feedback = root.querySelector<HTMLDivElement>('#trade-feedback');
     const tradeAdd = root.querySelector<HTMLButtonElement>('#trade-add');
     const tradeImport = root.querySelector<HTMLInputElement>('#trade-import');
+    const tradeImportLabel = root.querySelector<HTMLLabelElement>('#trade-import-label');
     const tradeImportReport = root.querySelector<HTMLDivElement>('#trade-import-report');
     const kpiTotal = root.querySelector<HTMLElement>('#kpi-total');
     const kpiOpen = root.querySelector<HTMLElement>('#kpi-open');
@@ -1741,6 +1756,7 @@ export function renderTradesView(root: HTMLElement): void {
       !feedback ||
       !tradeAdd ||
       !tradeImport ||
+      !tradeImportLabel ||
       !tradeImportReport ||
       !kpiTotal ||
       !kpiOpen ||
@@ -4906,6 +4922,9 @@ export function renderTradesView(root: HTMLElement): void {
           `Imported ${analysis.valid.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
         );
         renderImportReport(failures, lowConfidence);
+        if (tradeImportLabel) {
+          flashInline(tradeImportLabel, 'Imported');
+        }
         appendImportAudit({
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),

@@ -1,7 +1,7 @@
 import Chart from 'chart.js/auto';
 import type { ChartConfiguration, Chart as ChartJS, TooltipItem } from 'chart.js';
 import { renderShell, bindShell } from '../ui/shell';
-import { setBusy, showAlert } from '../ui/feedback';
+import { setBusy, showAlert, flashInline } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
 import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
@@ -339,6 +339,7 @@ export function renderDashboardView(root: HTMLElement): void {
                   <canvas id="allocation-chart" height="300"></canvas>
                   <div class="chart-empty text-muted small d-none" id="allocation-empty">No holdings yet.</div>
                 </div>
+                <div class="chart-legend" id="allocation-legend"></div>
                 <div class="dash-warning d-none" id="allocation-warning"></div>
               </div>
             </div>
@@ -469,6 +470,7 @@ export function renderDashboardView(root: HTMLElement): void {
     const trendEmpty = root.querySelector<HTMLDivElement>('#trend-empty');
     const allocationCanvas = root.querySelector<HTMLCanvasElement>('#allocation-chart');
     const allocationEmpty = root.querySelector<HTMLDivElement>('#allocation-empty');
+    const allocationLegend = root.querySelector<HTMLDivElement>('#allocation-legend');
     const exposureCanvas = root.querySelector<HTMLCanvasElement>('#exposure-chart');
     const exposureEmpty = root.querySelector<HTMLDivElement>('#exposure-empty');
     const exposureCount = root.querySelector<HTMLSpanElement>('#exposure-count');
@@ -542,6 +544,34 @@ export function renderDashboardView(root: HTMLElement): void {
               </div>
               <div class="strip-pnl ${pnlClass}">${formatPct(item.pnlPct)}</div>
             </div>
+          `;
+        })
+        .join('');
+    };
+
+    const renderPieLegend = (
+      container: HTMLDivElement | null,
+      labels: string[],
+      values: number[],
+      palette: string[],
+      totalValue: number
+    ) => {
+      if (!container) return;
+      if (!labels.length) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = labels
+        .map((label, index) => {
+          const value = values[index] ?? 0;
+          const pct = totalValue ? (value / totalValue) * 100 : 0;
+          const color = palette[index % palette.length];
+          return `
+            <span class="legend-pill">
+              <span class="legend-dot" style="background:${color}"></span>
+              ${label}
+              <span class="text-muted small">(${pct.toFixed(1)}%)</span>
+            </span>
           `;
         })
         .join('');
@@ -705,14 +735,19 @@ export function renderDashboardView(root: HTMLElement): void {
               ticks: {
                 color: axisTick,
                 maxTicksLimit: 6,
-                callback: (value, index) => tickFormatter(value, index)
+                callback: (value, index) => tickFormatter(value, index),
+                font: { size: 11, weight: '600' }
               }
             },
             y: {
               grid: {
                 color: gridColor
               },
-              ticks: { color: axisTick, callback: (val) => formatCompactMoney(Number(val)) }
+              ticks: {
+                color: axisTick,
+                callback: (val) => formatCompactMoney(Number(val)),
+                font: { size: 11, weight: '600' }
+              }
             }
           }
         },
@@ -725,7 +760,6 @@ export function renderDashboardView(root: HTMLElement): void {
       if (!allocationCanvas) return;
       if (allocationChart) allocationChart.destroy();
       const dark = isDarkTheme();
-      const legendText = dark ? '#e2e8f0' : '#334155';
       const top = holdings.slice(0, 5);
       const othersValue = holdings.slice(5).reduce((sum, row) => sum + row.currentValue, 0);
       const labels = [...top.map((row) => row.symbol)];
@@ -737,6 +771,7 @@ export function renderDashboardView(root: HTMLElement): void {
       if (!data.length) {
         allocationCanvas.classList.add('d-none');
         allocationEmpty?.classList.remove('d-none');
+        if (allocationLegend) allocationLegend.innerHTML = '';
         return;
       }
       allocationCanvas.classList.remove('d-none');
@@ -785,33 +820,7 @@ export function renderDashboardView(root: HTMLElement): void {
           },
           plugins: {
             legend: {
-              position: 'bottom',
-              labels: {
-                color: legendText,
-                boxWidth: 10,
-                padding: 12,
-                generateLabels(chart: ChartJS) {
-                  const { data } = chart;
-                  const dataset = data.datasets[0];
-                  if (!dataset || !Array.isArray(dataset.data)) return [];
-                  return data.labels!.map((label, index) => {
-                    const value = Number(dataset.data[index] ?? 0);
-                    const pct = totalValue ? (value / totalValue) * 100 : 0;
-                    const labelText = String(label ?? '');
-                    return {
-                      text: `${labelText} (${pct.toFixed(1)}%)`,
-                      fillStyle: Array.isArray(dataset.backgroundColor)
-                        ? dataset.backgroundColor[index]
-                        : dataset.backgroundColor,
-                      strokeStyle: dark ? '#0b1220' : '#ffffff',
-                      fontColor: legendText,
-                      lineWidth: 0,
-                      hidden: false,
-                      index
-                    };
-                  });
-                }
-              }
+              display: false
             },
             tooltip: {
               position: 'nearest',
@@ -830,6 +839,7 @@ export function renderDashboardView(root: HTMLElement): void {
         plugins: [centerTextPlugin]
       };
       allocationChart = new Chart(allocationCanvas, config);
+      renderPieLegend(allocationLegend, labels, data, chartPalette, totalValue);
 
       if (allocationLimit > 0 && allocationWarning) {
         const maxAlloc = holdings[0];
@@ -880,10 +890,14 @@ export function renderDashboardView(root: HTMLElement): void {
               grid: { color: dark ? 'rgba(148, 163, 184, 0.2)' : '#eef2f6' },
               ticks: {
                 color: dark ? '#94a3b8' : '#64748b',
-                callback: (val) => formatMoney(Number(val))
+                callback: (val) => formatMoney(Number(val)),
+                font: { size: 11, weight: '600' }
               }
             },
-            y: { grid: { display: false }, ticks: { color: dark ? '#94a3b8' : '#64748b' } }
+            y: {
+              grid: { display: false },
+              ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 11, weight: '600' } }
+            }
           }
         }
       };
@@ -994,6 +1008,9 @@ export function renderDashboardView(root: HTMLElement): void {
         await syncNow(session);
         await refreshDashboard();
         if (feedback) showAlert(feedback, 'success', 'Dashboard refreshed.');
+        if (refreshButton) {
+          flashInline(refreshButton, 'Synced');
+        }
       } catch (error) {
         if (feedback) showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {

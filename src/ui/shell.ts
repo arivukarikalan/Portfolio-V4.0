@@ -260,26 +260,6 @@ export function renderShell(options: {
           ${mobileQuickNavMarkup}
         </div>
       </nav>
-      <nav class="mobile-action-bar d-lg-none">
-        <div class="mobile-action-bar-inner">
-          <a class="quick-action-btn" href="trades.html#add-trade">
-            ${lucideIcon('plus')}
-            Add Trade
-          </a>
-          <a class="quick-action-btn" href="trades.html#import">
-            ${lucideIcon('upload')}
-            Import
-          </a>
-          <button class="quick-action-btn" id="quick-sync-btn" type="button">
-            ${lucideIcon('refresh-ccw')}
-            Sync
-          </button>
-          <a class="quick-action-btn" href="trades.html#recovery">
-            ${lucideIcon('rotate-cw')}
-            Recovery
-          </a>
-        </div>
-      </nav>
     </div>
   `;
 }
@@ -301,7 +281,6 @@ export function bindShell(root: HTMLElement, session: UserSession): void {
   const profileCompact = root.querySelector<HTMLInputElement>('#profile-compact');
   const profileAnimations = root.querySelector<HTMLInputElement>('#profile-animations');
   const mobileQuickNav = root.querySelector<HTMLElement>('.mobile-bottom-nav');
-  const quickSync = root.querySelector<HTMLButtonElement>('#quick-sync-btn');
 
   const closeSidebar = () => {
     sidebar?.classList.remove('show');
@@ -323,12 +302,6 @@ export function bindShell(root: HTMLElement, session: UserSession): void {
     syncPanel?.classList.toggle('show');
     syncPanelBackdrop?.classList.toggle('show');
     syncPanel?.setAttribute('aria-hidden', syncPanel?.classList.contains('show') ? 'false' : 'true');
-  });
-
-  quickSync?.addEventListener('click', () => {
-    syncPanel?.classList.add('show');
-    syncPanelBackdrop?.classList.add('show');
-    syncPanel?.setAttribute('aria-hidden', 'false');
   });
   syncPanelBackdrop?.addEventListener('click', closeSyncPanel);
   syncPanelClose?.addEventListener('click', closeSyncPanel);

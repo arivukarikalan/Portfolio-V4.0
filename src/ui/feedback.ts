@@ -47,3 +47,17 @@ export function setBusy(button: HTMLButtonElement, busy: boolean, label: string)
     button.textContent = button.dataset.label || label;
   }
 }
+
+export function flashInline(target: HTMLElement, message: string, timeout = 2200): void {
+  const original = target.dataset.flashOriginal ?? target.innerHTML;
+  target.dataset.flashOriginal = original;
+  target.dataset.flashToken = String(Date.now());
+  const token = target.dataset.flashToken;
+  target.classList.add('btn-flash-success');
+  target.innerHTML = message;
+  window.setTimeout(() => {
+    if (target.dataset.flashToken !== token) return;
+    target.classList.remove('btn-flash-success');
+    target.innerHTML = original;
+  }, timeout);
+}

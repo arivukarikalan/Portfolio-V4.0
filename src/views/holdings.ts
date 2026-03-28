@@ -156,6 +156,7 @@ export function renderHoldingsView(root: HTMLElement): void {
                   <canvas id="holdings-pie" height="260"></canvas>
                   <div class="chart-empty text-muted small d-none" id="holdings-pie-empty">No holdings yet.</div>
                 </div>
+                <div class="chart-legend" id="holdings-legend"></div>
               </div>
             </div>
           </div>
@@ -255,6 +256,7 @@ export function renderHoldingsView(root: HTMLElement): void {
     const barCanvas = root.querySelector<HTMLCanvasElement>('#holdings-bar');
     const pieEmpty = root.querySelector<HTMLDivElement>('#holdings-pie-empty');
     const barEmpty = root.querySelector<HTMLDivElement>('#holdings-bar-empty');
+    const pieLegend = root.querySelector<HTMLDivElement>('#holdings-legend');
 
     let trades: TradeRecord[] = [];
     let holdings: HoldingRow[] = [];
@@ -336,12 +338,41 @@ export function renderHoldingsView(root: HTMLElement): void {
       if (kpiPnlPct) kpiPnlPct.classList.toggle('text-success', (pnlPct ?? 0) >= 0);
     };
 
+    const renderPieLegend = (
+      container: HTMLDivElement | null,
+      labels: string[],
+      values: number[],
+      palette: string[],
+      totalValue: number
+    ) => {
+      if (!container) return;
+      if (!labels.length) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = labels
+        .map((label, index) => {
+          const value = values[index] ?? 0;
+          const pct = totalValue ? (value / totalValue) * 100 : 0;
+          const color = palette[index % palette.length];
+          return `
+            <span class="legend-pill">
+              <span class="legend-dot" style="background:${color}"></span>
+              ${label}
+              <span class="text-muted small">(${pct.toFixed(1)}%)</span>
+            </span>
+          `;
+        })
+        .join('');
+    };
+
     const renderCharts = (rows: HoldingRow[]) => {
       if (!pieCanvas || !barCanvas) return;
       if (allocationChart) allocationChart.destroy();
       if (topChart) topChart.destroy();
       const dark = isDarkTheme();
-      const legendText = dark ? '#e2e8f0' : '#334155';
+      const axisTick = dark ? '#94a3b8' : '#64748b';
+      const gridColor = dark ? 'rgba(148, 163, 184, 0.2)' : '#eef2f6';
 
       const values = rows
         .map((row) => ({
@@ -363,6 +394,7 @@ export function renderHoldingsView(root: HTMLElement): void {
       if (!pieData.length) {
         pieCanvas.classList.add('d-none');
         pieEmpty?.classList.remove('d-none');
+        if (pieLegend) pieLegend.innerHTML = '';
       } else {
         pieCanvas.classList.remove('d-none');
         pieEmpty?.classList.add('d-none');
@@ -409,35 +441,7 @@ export function renderHoldingsView(root: HTMLElement): void {
               padding: { top: 12, bottom: 24, left: 12, right: 12 }
             },
             plugins: {
-              legend: {
-                position: 'bottom',
-                labels: {
-                  color: legendText,
-                  boxWidth: 10,
-                  padding: 12,
-                  generateLabels(chart: ChartJS) {
-                    const { data } = chart;
-                    const dataset = data.datasets[0];
-                    if (!dataset || !Array.isArray(dataset.data)) return [];
-                    return data.labels!.map((label, index) => {
-                      const value = Number(dataset.data[index] ?? 0);
-                      const pct = totalValue ? (value / totalValue) * 100 : 0;
-                      const labelText = String(label ?? '');
-                    return {
-                      text: `${labelText} (${pct.toFixed(1)}%)`,
-                      fillStyle: Array.isArray(dataset.backgroundColor)
-                        ? dataset.backgroundColor[index]
-                        : dataset.backgroundColor,
-                      strokeStyle: dark ? '#0b1220' : '#ffffff',
-                      fontColor: legendText,
-                      lineWidth: 0,
-                      hidden: false,
-                      index
-                    };
-                  });
-                }
-                }
-              },
+              legend: { display: false },
               tooltip: {
                 position: 'nearest',
                 yAlign: 'bottom',
@@ -455,6 +459,7 @@ export function renderHoldingsView(root: HTMLElement): void {
           plugins: [centerTextPlugin]
         };
         allocationChart = new Chart(pieCanvas, pieConfig);
+        renderPieLegend(pieLegend, pieLabels, pieData, chartPalette, totalValue);
       }
 
       const holdTop = rows
@@ -491,8 +496,11 @@ export function renderHoldingsView(root: HTMLElement): void {
             },
             indexAxis: 'y',
             scales: {
-              x: { grid: { color: '#eef2f6' }, ticks: { callback: (val) => `${val} d` } },
-              y: { grid: { display: false } }
+              x: {
+                grid: { color: gridColor },
+                ticks: { color: axisTick, callback: (val) => `${val} d`, font: { size: 11, weight: '600' } }
+              },
+              y: { grid: { display: false }, ticks: { color: axisTick, font: { size: 11, weight: '600' } } }
             }
           }
         });
