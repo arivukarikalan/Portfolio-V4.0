@@ -211,7 +211,9 @@ function findExistingDuplicates(
   }
   const importIds = new Set(importRows.map((row) => row.importId).filter(Boolean) as string[]);
   const importSignatures = new Set(
-    importRows.map((row) => buildTradeSignature(row.symbol, row.side, row.quantity, row.price, row.tradeDate))
+    importRows
+      .filter((row) => !row.importId)
+      .map((row) => buildTradeSignature(row.symbol, row.side, row.quantity, row.price, row.tradeDate))
   );
   const grouped = new Map<string, TradeRecord[]>();
   existingTrades.forEach((trade) => {
@@ -240,16 +242,25 @@ function findExistingDuplicates(
   return { toDelete, cleanedCount: toDelete.length };
 }
 
-function buildDedupeKeys(trades: TradeRecord[]): { byImportId: Set<string>; bySignature: Set<string> } {
+function buildDedupeKeys(trades: TradeRecord[]): {
+  byImportId: Set<string>;
+  bySignatureAll: Set<string>;
+  bySignatureNoId: Set<string>;
+} {
   const byImportId = new Set<string>();
-  const bySignature = new Set<string>();
+  const bySignatureAll = new Set<string>();
+  const bySignatureNoId = new Set<string>();
   trades.forEach((trade) => {
     if (trade.importId) {
       byImportId.add(trade.importId);
     }
-    bySignature.add(buildTradeSignature(trade.symbol, trade.side, trade.quantity, trade.price, trade.tradeDate));
+    const signature = buildTradeSignature(trade.symbol, trade.side, trade.quantity, trade.price, trade.tradeDate);
+    bySignatureAll.add(signature);
+    if (!trade.importId) {
+      bySignatureNoId.add(signature);
+    }
   });
-  return { byImportId, bySignature };
+  return { byImportId, bySignatureAll, bySignatureNoId };
 }
 
 const COMPANY_STOPWORDS = new Set([
@@ -478,6 +489,14 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
   const qtyIdx = headerIndex(parsed.headers, ['qty', 'quantity', 'trade_qty']);
   const priceIdx = headerIndex(parsed.headers, ['price', 'trade_price', 'rate']);
   const dateIdx = headerIndex(parsed.headers, ['date', 'trade_date', 'order_execution_time']);
+  const execTimeIdx = headerIndex(parsed.headers, [
+    'order_execution_time',
+    'trade_time',
+    'execution_time',
+    'timestamp',
+    'order_time',
+    'time'
+  ]);
   const tradeIdIdx = headerIndex(parsed.headers, ['trade_id', 'trade id', 'tradeid', 'execution_id', 'execution id']);
   const orderIdIdx = headerIndex(parsed.headers, ['order_id', 'order id', 'orderid', 'order_no', 'order no', 'order number']);
   const exchangeIdIdx = headerIndex(parsed.headers, [
@@ -506,7 +525,8 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
     const importId = buildImportId(
       coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
       coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
-      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : ''),
+      coerceId(execTimeIdx >= 0 ? row[execTimeIdx] : '')
     );
 
     if (!symbol || !Number.isFinite(quantity) || !Number.isFinite(price)) {
@@ -706,15 +726,15 @@ function dedupeImportRows(
   rows: ImportTrade[],
   existingTrades: TradeRecord[]
 ): { rows: ImportTrade[]; duplicateCount: number } {
-  const { byImportId, bySignature } = buildDedupeKeys(existingTrades);
+  const { byImportId, bySignatureAll, bySignatureNoId } = buildDedupeKeys(existingTrades);
   let duplicateCount = 0;
   const next: ImportTrade[] = [];
   rows.forEach((row) => {
     const signature = buildTradeSignature(row.symbol, row.side, row.quantity, row.price, row.tradeDate);
     const importId = row.importId;
     const isDuplicate = importId
-      ? byImportId.has(importId) || bySignature.has(signature)
-      : bySignature.has(signature);
+      ? byImportId.has(importId) || bySignatureNoId.has(signature)
+      : bySignatureAll.has(signature);
     if (isDuplicate) {
       duplicateCount += 1;
       return;
@@ -722,8 +742,10 @@ function dedupeImportRows(
     next.push(row);
     if (importId) {
       byImportId.add(importId);
+    } else {
+      bySignatureNoId.add(signature);
     }
-    bySignature.add(signature);
+    bySignatureAll.add(signature);
   });
   return { rows: next, duplicateCount };
 }
