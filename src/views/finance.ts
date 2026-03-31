@@ -749,20 +749,11 @@ export function renderFinanceView(root: HTMLElement): void {
       }
       const yearNow = new Date().getFullYear();
       const sorted = [...goals].sort((a, b) => a.targetYear - b.targetYear);
-      const nearest = sorted[0];
-      const yearsLeft = nearest.targetYear - yearNow;
       const contributionTxns = transactions.filter(
         (row) =>
           !isTemplate(row) &&
           (row.type === 'INVESTMENT' || row.type === 'LIQUID_ASSET' || row.type === 'OTHER_ASSET')
       );
-      const tradeBuys = trades.filter((trade) => trade.side === 'BUY');
-      const tradeByMonth = new Map<string, number>();
-      tradeBuys.forEach((trade) => {
-        const key = monthKey(trade.tradeDate);
-        if (!key) return;
-        tradeByMonth.set(key, (tradeByMonth.get(key) || 0) + trade.quantity * trade.price);
-      });
       const byMonth = new Map<string, number>();
       contributionTxns.forEach((row) => {
         const key = monthKey(row.date);
@@ -774,18 +765,13 @@ export function renderFinanceView(root: HTMLElement): void {
       const recentKeys = recentBuckets.map((bucket) => bucket.key);
       const monthlyAll =
         recentKeys.length > 0
-          ? recentKeys.reduce((sum, key) => sum + (byMonth.get(key) || 0) + (tradeByMonth.get(key) || 0), 0) /
-            recentKeys.length
+          ? recentKeys.reduce((sum, key) => sum + (byMonth.get(key) || 0), 0) / recentKeys.length
           : 0;
       const netSeries = computeNetworthSeries(buckets, holdingsValue);
       const lastNet = netSeries.slice(-1)[0] || netWorthCurrent;
       const backIndex = Math.max(0, netSeries.length - 1 - Math.min(3, netSeries.length - 1));
       const prevNet = netSeries[backIndex] || lastNet;
       const growthRate = prevNet > 0 ? ((lastNet - prevNet) / prevNet) * 100 : 0;
-      goalMeta.textContent = `${sorted.length} goals • Nearest ${nearest.name} (${yearsLeft >= 0 ? yearsLeft : 0} yrs left) • Avg monthly contribution ${formatMoney(
-        monthlyAll
-      )} • Growth ${growthRate.toFixed(2)}%`;
-
       const sumByCategory = (types: TransactionType[], keywords: string[]) =>
         contributionTxns
           .filter((row) => types.includes(row.type))
@@ -809,74 +795,102 @@ export function renderFinanceView(root: HTMLElement): void {
           }, 0) / recentKeys.length
         );
       };
-      goalList.innerHTML = sorted
-        .slice(0, 6)
-        .map((goal) => {
-          const yearLeft = Math.max(0, goal.targetYear - yearNow);
-          const name = goal.name.toLowerCase();
-          let current = 0;
-          let monthlyAvg = 0;
-          if (name.includes('net worth') || name.includes('networth')) {
-            current = netWorthCurrent;
-            const last = netSeries.slice(-1)[0] || netWorthCurrent;
-            const backIndex = Math.max(0, netSeries.length - 1 - Math.min(3, netSeries.length - 1));
-            const prev = netSeries[backIndex] || last;
-            const period = Math.max(1, Math.min(3, netSeries.length - 1));
-            monthlyAvg = Math.max(0, (last - prev) / period);
-          } else if (name.includes('gold')) {
-            current = sumByCategory(['INVESTMENT', 'OTHER_ASSET'], ['gold']);
-            monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT', 'OTHER_ASSET'], ['gold']));
-          } else if (name.includes('mutual') || name.includes('mf')) {
-            current = sumByCategory(['INVESTMENT'], ['mutual', 'mf']);
-            monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT'], ['mutual', 'mf']));
-          } else if (name.includes('stock') || name.includes('equity')) {
-            current = sumByCategory(['INVESTMENT'], ['equity', 'stock']) + holdingsValue;
-            const txnAvg = avgMonthlyByCategory(['INVESTMENT'], ['equity', 'stock']);
-            const tradeAvg =
-              recentKeys.length > 0
-                ? recentKeys.reduce((sum, key) => sum + (tradeByMonth.get(key) || 0), 0) / recentKeys.length
-                : 0;
-            monthlyAvg = Math.max(0, txnAvg + tradeAvg);
-          } else if (name.includes('fd') || name.includes('fixed') || name.includes('bank')) {
-            current = sumByCategory(['LIQUID_ASSET', 'INVESTMENT'], ['fd', 'fixed', 'bank']);
-            monthlyAvg = Math.max(0, avgMonthlyByCategory(['LIQUID_ASSET', 'INVESTMENT'], ['fd', 'fixed', 'bank']));
-          } else {
-            current = sumByCategory(['INVESTMENT', 'LIQUID_ASSET', 'OTHER_ASSET'], []);
-            monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT', 'LIQUID_ASSET', 'OTHER_ASSET'], []));
-          }
 
-          const progress = goal.targetAmount > 0 ? Math.min(100, (current / goal.targetAmount) * 100) : 0;
-          const remaining = Math.max(0, goal.targetAmount - current);
-          const monthsToGo = monthlyAvg > 0 ? Math.ceil(remaining / monthlyAvg) : null;
-          const monthsLeft = monthsUntilTargetYear(goal.targetYear);
-          const requiredMonthly = remaining > 0 ? remaining / monthsLeft : 0;
-          const requiredWithReturn = requiredMonthlyWithReturn(goal.targetAmount, current, monthsLeft, expectedReturnPct);
-          const eta = monthsToGo
-            ? new Date(new Date().getFullYear(), new Date().getMonth() + monthsToGo, 1).toLocaleDateString('en-IN', {
+      const goalSummaries = sorted.map((goal) => {
+        const yearLeft = Math.max(0, goal.targetYear - yearNow);
+        const name = goal.name.toLowerCase();
+        let current = 0;
+        let monthlyAvg = 0;
+        if (name.includes('net worth') || name.includes('networth')) {
+          current = netWorthCurrent;
+          const last = netSeries.slice(-1)[0] || netWorthCurrent;
+          const backIndex = Math.max(0, netSeries.length - 1 - Math.min(3, netSeries.length - 1));
+          const prev = netSeries[backIndex] || last;
+          const period = Math.max(1, Math.min(3, netSeries.length - 1));
+          monthlyAvg = Math.max(0, (last - prev) / period);
+        } else if (name.includes('gold')) {
+          current = sumByCategory(['OTHER_ASSET', 'INVESTMENT'], ['gold']);
+          monthlyAvg = Math.max(0, avgMonthlyByCategory(['OTHER_ASSET', 'INVESTMENT'], ['gold']));
+        } else if (name.includes('mutual') || name.includes('mf')) {
+          current = sumByCategory(['INVESTMENT'], ['mutual', 'mf']);
+          monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT'], ['mutual', 'mf']));
+        } else if (name.includes('stock') || name.includes('equity')) {
+          current = holdingsValue;
+          monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT'], ['equity', 'stock']));
+        } else if (name.includes('fd') || name.includes('fixed') || name.includes('bank')) {
+          current = sumByCategory(['LIQUID_ASSET', 'INVESTMENT'], ['fd', 'fixed', 'bank']);
+          monthlyAvg = Math.max(0, avgMonthlyByCategory(['LIQUID_ASSET', 'INVESTMENT'], ['fd', 'fixed', 'bank']));
+        } else {
+          current = sumByCategory(['INVESTMENT', 'LIQUID_ASSET', 'OTHER_ASSET'], []);
+          monthlyAvg = Math.max(0, avgMonthlyByCategory(['INVESTMENT', 'LIQUID_ASSET', 'OTHER_ASSET'], []));
+        }
+
+        const progress = goal.targetAmount > 0 ? Math.min(100, (current / goal.targetAmount) * 100) : 0;
+        const remaining = Math.max(0, goal.targetAmount - current);
+        const monthsToGo = monthlyAvg > 0 ? Math.ceil(remaining / monthlyAvg) : null;
+        const monthsLeft = monthsUntilTargetYear(goal.targetYear);
+        const requiredMonthly = remaining > 0 ? remaining / monthsLeft : 0;
+        const requiredWithReturn = requiredMonthlyWithReturn(goal.targetAmount, current, monthsLeft, expectedReturnPct);
+        const eta = monthsToGo
+          ? new Date(new Date().getFullYear(), new Date().getMonth() + monthsToGo, 1).toLocaleDateString('en-IN', {
+              month: 'short',
+              year: 'numeric'
+            })
+          : 'Add contributions';
+        const etaReturnMonths = projectedMonthsToTarget(goal.targetAmount, current, monthlyAvg, expectedReturnPct);
+        const etaReturn =
+          etaReturnMonths !== null
+            ? new Date(new Date().getFullYear(), new Date().getMonth() + etaReturnMonths, 1).toLocaleDateString('en-IN', {
                 month: 'short',
                 year: 'numeric'
               })
             : 'Add contributions';
-          const etaReturnMonths = projectedMonthsToTarget(goal.targetAmount, current, monthlyAvg, expectedReturnPct);
-          const etaReturn =
-            etaReturnMonths !== null
-              ? new Date(new Date().getFullYear(), new Date().getMonth() + etaReturnMonths, 1).toLocaleDateString('en-IN', {
-                  month: 'short',
-                  year: 'numeric'
-                })
-              : 'Add contributions';
+
+        const hide = goal.status === 'ACTIVE' && current <= 0 && monthlyAvg <= 0;
+        return {
+          goal,
+          yearLeft,
+          current,
+          monthlyAvg,
+          progress,
+          remaining,
+          requiredMonthly,
+          requiredWithReturn,
+          eta,
+          etaReturn,
+          hide
+        };
+      });
+
+      const visibleGoals = goalSummaries.filter((item) => !item.hide);
+      if (!visibleGoals.length) {
+        goalMeta.textContent = 'No active goals with balance.';
+        goalList.innerHTML = '<div class="text-muted small">Add contributions or manage goals from Transactions → Goals & Plans.</div>';
+        return;
+      }
+
+      const nearest = visibleGoals[0].goal;
+      const yearsLeft = nearest.targetYear - yearNow;
+      goalMeta.textContent = `${visibleGoals.length} goals • Nearest ${nearest.name} (${yearsLeft >= 0 ? yearsLeft : 0} yrs left) • Avg monthly contribution ${formatMoney(
+        monthlyAll
+      )} • Growth ${growthRate.toFixed(2)}%`;
+
+      goalList.innerHTML = visibleGoals
+        .slice(0, 6)
+        .map((summary) => {
+          const goal = summary.goal;
           return `
             <div class="finance-list-item goal-item">
               <div class="label">${goal.name}</div>
               <div class="value">${formatMoney(goal.targetAmount)}</div>
               <div class="goal-progress">
-                <div class="goal-progress-fill" style="width:${progress.toFixed(1)}%"></div>
+                <div class="goal-progress-fill" style="width:${summary.progress.toFixed(1)}%"></div>
               </div>
-              <div class="meta">${progress.toFixed(1)}% funded • ${goal.targetYear} • ${yearLeft} yrs left</div>
-              <div class="meta">Remaining: ${formatMoney(remaining)}</div>
-              <div class="meta">Current pace: ${formatMoney(monthlyAvg)}/mo • Required: ${formatMoney(requiredMonthly)}/mo</div>
-              <div class="meta">Required with ${expectedReturnPct.toFixed(1)}%: ${formatMoney(requiredWithReturn)}/mo</div>
-              <div class="meta">ETA (0%): ${eta} • ETA (${expectedReturnPct.toFixed(1)}%): ${etaReturn}</div>
+              <div class="meta">${summary.progress.toFixed(1)}% funded • ${goal.targetYear} • ${summary.yearLeft} yrs left</div>
+              <div class="meta">Remaining: ${formatMoney(summary.remaining)}</div>
+              <div class="meta">Current pace: ${formatMoney(summary.monthlyAvg)}/mo • Required: ${formatMoney(summary.requiredMonthly)}/mo</div>
+              <div class="meta">Required with ${expectedReturnPct.toFixed(1)}%: ${formatMoney(summary.requiredWithReturn)}/mo</div>
+              <div class="meta">ETA (0%): ${summary.eta} • ETA (${expectedReturnPct.toFixed(1)}%): ${summary.etaReturn}</div>
             </div>
           `;
         })
