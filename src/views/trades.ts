@@ -191,13 +191,53 @@ function buildTradeSignature(
 ): string {
   const qty = Number(quantity);
   const pr = Number(price);
+  const normalizedSymbol = stripSeriesSuffix(normalizeSymbol(symbol));
+  const normalizedDate = coerceDate(tradeDate) || String(tradeDate || '').trim();
   return [
-    normalizeSymbol(symbol),
+    normalizedSymbol,
     side,
     Number.isFinite(qty) ? qty.toFixed(4) : String(quantity),
     Number.isFinite(pr) ? pr.toFixed(4) : String(price),
-    tradeDate || ''
+    normalizedDate
   ].join('|');
+}
+
+function findExistingDuplicates(
+  existingTrades: TradeRecord[],
+  importRows: ImportTrade[]
+): { toDelete: TradeRecord[]; cleanedCount: number } {
+  if (!existingTrades.length || !importRows.length) {
+    return { toDelete: [], cleanedCount: 0 };
+  }
+  const importIds = new Set(importRows.map((row) => row.importId).filter(Boolean) as string[]);
+  const importSignatures = new Set(
+    importRows.map((row) => buildTradeSignature(row.symbol, row.side, row.quantity, row.price, row.tradeDate))
+  );
+  const grouped = new Map<string, TradeRecord[]>();
+  existingTrades.forEach((trade) => {
+    const signature = buildTradeSignature(trade.symbol, trade.side, trade.quantity, trade.price, trade.tradeDate);
+    const importId = trade.importId;
+    let key: string | null = null;
+    if (importId && importIds.has(importId)) {
+      key = `ID:${importId}`;
+    } else if (importSignatures.has(signature)) {
+      key = `SIG:${signature}`;
+    }
+    if (!key) return;
+    const bucket = grouped.get(key);
+    if (bucket) {
+      bucket.push(trade);
+    } else {
+      grouped.set(key, [trade]);
+    }
+  });
+  const toDelete: TradeRecord[] = [];
+  grouped.forEach((bucket) => {
+    if (bucket.length <= 1) return;
+    bucket.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    toDelete.push(...bucket.slice(1));
+  });
+  return { toDelete, cleanedCount: toDelete.length };
 }
 
 function buildDedupeKeys(trades: TradeRecord[]): { byImportId: Set<string>; bySignature: Set<string> } {
@@ -268,6 +308,7 @@ type ImportAuditEntry = {
   failedCount: number;
   lowConfidenceCount: number;
   duplicateCount?: number;
+  cleanupCount?: number;
   status: 'imported' | 'failed';
   error?: string;
 };
@@ -5012,8 +5053,11 @@ export function renderTradesView(root: HTMLElement): void {
           }
         });
         saveImportConfidence(confidenceMap);
-        const { rows: dedupedRows, duplicateCount } = dedupeImportRows(analysis.valid, trades);
-        if (!dedupedRows.length) {
+        const { toDelete: existingDuplicates, cleanedCount } = findExistingDuplicates(trades, analysis.valid);
+        const duplicateIdSet = new Set(existingDuplicates.map((trade) => trade.id));
+        const dedupeBase = trades.filter((trade) => !duplicateIdSet.has(trade.id));
+        const { rows: dedupedRows, duplicateCount } = dedupeImportRows(analysis.valid, dedupeBase);
+        if (!dedupedRows.length && !cleanedCount) {
           renderImportReport(failureMap.size ? Array.from(failureMap.values()) : [], Array.from(lowConfidenceMap.values()));
           showAlert(feedback, 'warning', 'All rows are duplicates. No new trades imported.');
           return;
@@ -5023,21 +5067,30 @@ export function renderTradesView(root: HTMLElement): void {
         const failedCount = failures.reduce((sum, item) => sum + item.count, 0);
         const ok = await confirmAction({
           title: 'Import Trades',
-          message: `Import ${dedupedRows.length} trades from this file?${
+          message: `${dedupedRows.length ? `Import ${dedupedRows.length} trades from this file?` : 'No new trades found in this file.'}${
             mappedCount ? ` (${mappedCount} symbols auto-mapped)` : ''
           }${failedCount ? ` (${failedCount} trades unmapped)` : ''}${
             lowConfidence.length ? ` (${lowConfidence.length} low confidence)` : ''
-          }${duplicateCount ? ` (${duplicateCount} duplicates skipped)` : ''}`,
-          confirmLabel: 'Import'
+          }${duplicateCount ? ` (${duplicateCount} duplicates skipped)` : ''}${
+            cleanedCount ? ` (${cleanedCount} existing duplicates will be merged)` : ''
+          }`,
+          confirmLabel: dedupedRows.length ? 'Import' : 'Merge Duplicates'
         });
         if (!ok) return;
-        await Promise.all(dedupedRows.map(({ companyName: _companyName, ...row }) => addTrade(row)));
+        if (cleanedCount) {
+          await Promise.all(existingDuplicates.map((trade) => deleteTrade(trade.id, session.userId)));
+        }
+        if (dedupedRows.length) {
+          await Promise.all(dedupedRows.map(({ companyName: _companyName, ...row }) => addTrade(row)));
+        }
         await refreshData();
         await queueAndSync();
         showAlert(
           feedback,
           'success',
-          `Imported ${dedupedRows.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
+          dedupedRows.length
+            ? `Imported ${dedupedRows.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
+            : `Merged ${cleanedCount} duplicates${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
         );
         renderImportReport(failures, lowConfidence);
         if (tradeImportLabel) {
@@ -5054,6 +5107,7 @@ export function renderTradesView(root: HTMLElement): void {
           failedCount,
           lowConfidenceCount: lowConfidence.length,
           duplicateCount,
+          cleanupCount: cleanedCount,
           status: 'imported'
         });
       } catch (error) {

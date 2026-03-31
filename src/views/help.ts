@@ -14,6 +14,7 @@ type ImportAuditEntry = {
   failedCount: number;
   lowConfidenceCount: number;
   duplicateCount?: number;
+  cleanupCount?: number;
   status: 'imported' | 'failed';
   error?: string;
 };
