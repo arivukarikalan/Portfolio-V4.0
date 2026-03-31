@@ -13,6 +13,7 @@ type ImportAuditEntry = {
   mappedCount: number;
   failedCount: number;
   lowConfidenceCount: number;
+  duplicateCount?: number;
   status: 'imported' | 'failed';
   error?: string;
 };

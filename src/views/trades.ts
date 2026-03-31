@@ -48,6 +48,8 @@ type ImportTrade = TradeInput & {
   mappingScore?: number;
   mappingConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
   mappingMethod?: string;
+  importId?: string;
+  importKey?: string;
 };
 
 type CsvAnalysis = {
@@ -170,6 +172,46 @@ function coerceDate(value: unknown): string {
   return Number.isNaN(date.getTime()) ? asString : date.toISOString().slice(0, 10);
 }
 
+function coerceId(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function buildImportId(...values: Array<string | undefined>): string | undefined {
+  const raw = values.find((value) => value && String(value).trim());
+  if (!raw) return undefined;
+  return `ID:${String(raw).trim()}`;
+}
+
+function buildTradeSignature(
+  symbol: string,
+  side: TradeSide,
+  quantity: number,
+  price: number,
+  tradeDate: string
+): string {
+  const qty = Number(quantity);
+  const pr = Number(price);
+  return [
+    normalizeSymbol(symbol),
+    side,
+    Number.isFinite(qty) ? qty.toFixed(4) : String(quantity),
+    Number.isFinite(pr) ? pr.toFixed(4) : String(price),
+    tradeDate || ''
+  ].join('|');
+}
+
+function buildDedupeKeys(trades: TradeRecord[]): { byImportId: Set<string>; bySignature: Set<string> } {
+  const byImportId = new Set<string>();
+  const bySignature = new Set<string>();
+  trades.forEach((trade) => {
+    if (trade.importId) {
+      byImportId.add(trade.importId);
+    }
+    bySignature.add(buildTradeSignature(trade.symbol, trade.side, trade.quantity, trade.price, trade.tradeDate));
+  });
+  return { byImportId, bySignature };
+}
+
 const COMPANY_STOPWORDS = new Set([
   'LTD',
   'LIMITED',
@@ -225,6 +267,7 @@ type ImportAuditEntry = {
   mappedCount: number;
   failedCount: number;
   lowConfidenceCount: number;
+  duplicateCount?: number;
   status: 'imported' | 'failed';
   error?: string;
 };
@@ -394,6 +437,14 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
   const qtyIdx = headerIndex(parsed.headers, ['qty', 'quantity', 'trade_qty']);
   const priceIdx = headerIndex(parsed.headers, ['price', 'trade_price', 'rate']);
   const dateIdx = headerIndex(parsed.headers, ['date', 'trade_date', 'order_execution_time']);
+  const tradeIdIdx = headerIndex(parsed.headers, ['trade_id', 'trade id', 'tradeid', 'execution_id', 'execution id']);
+  const orderIdIdx = headerIndex(parsed.headers, ['order_id', 'order id', 'orderid', 'order_no', 'order no', 'order number']);
+  const exchangeIdIdx = headerIndex(parsed.headers, [
+    'exchange_order_id',
+    'exchange order id',
+    'exch_order_id',
+    'exchange_order_no'
+  ]);
   const notesIdx = headerIndex(parsed.headers, ['notes', 'note', 'remarks']);
 
   if (symbolIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
@@ -411,6 +462,11 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
     const price = Number(row[priceIdx]);
     const tradeDate = coerceDate(dateIdx >= 0 ? row[dateIdx] : '');
     const notes = notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '';
+    const importId = buildImportId(
+      coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
+      coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
+      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+    );
 
     if (!symbol || !Number.isFinite(quantity) || !Number.isFinite(price)) {
       invalid.push({ row: index + 2, reason: 'Missing symbol/qty/price' });
@@ -425,7 +481,8 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
       notes,
-      companyName: companyName || undefined
+      companyName: companyName || undefined,
+      importId
     });
   });
 
@@ -448,6 +505,14 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
     const scripIdx = headers.indexOf('scrip');
     const companyIdx = headerIndex(headers, ['company', 'company_name', 'scrip_name', 'stock_name', 'name']);
     const dateIdx = headerIndex(headers, ['date']);
+    const tradeIdIdx = headerIndex(headers, ['trade_id', 'trade id', 'tradeid', 'execution_id', 'execution id']);
+    const orderIdIdx = headerIndex(headers, ['order_id', 'order id', 'orderid', 'order_no', 'order no', 'order number']);
+    const exchangeIdIdx = headerIndex(headers, [
+      'exchange_order_id',
+      'exchange order id',
+      'exch_order_id',
+      'exchange_order_no'
+    ]);
     const narrationIdx = headerIndex(headers, ['narration', 'remarks']);
     const buyQtyIdx = headerIndex(headers, ['b_qty', 'bqty']);
     const buyRateIdx = headerIndex(headers, ['b_n_rate', 'b_gr_rate', 'b_rate']);
@@ -469,6 +534,11 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       const sellQty = sellQtyIdx >= 0 ? Number(row[sellQtyIdx]) : 0;
       const buyRate = buyRateIdx >= 0 ? Number(row[buyRateIdx]) : 0;
       const sellRate = sellRateIdx >= 0 ? Number(row[sellRateIdx]) : 0;
+      const baseImportId = buildImportId(
+        coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
+        coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
+        coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+      );
 
       if (!symbol) {
         invalid.push({ row: index + headerRowIndex + 2, reason: 'Missing symbol' });
@@ -483,7 +553,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
           quantity: buyQty,
           price: buyRate,
           tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
-          companyName: companyName || undefined
+          companyName: companyName || undefined,
+          importId: baseImportId ? `${baseImportId}|BUY` : undefined
         });
       }
 
@@ -495,7 +566,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
           quantity: sellQty,
           price: sellRate,
           tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
-          companyName: companyName || undefined
+          companyName: companyName || undefined,
+          importId: baseImportId ? `${baseImportId}|SELL` : undefined
         });
       }
     });
@@ -509,6 +581,14 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
   const qtyIdx = headerIndex(headers, ['qty', 'quantity', 'trade_qty']);
   const priceIdx = headerIndex(headers, ['price', 'trade_price', 'rate']);
   const dateIdx = headerIndex(headers, ['date', 'trade_date']);
+  const tradeIdIdx = headerIndex(headers, ['trade_id', 'trade id', 'tradeid', 'execution_id', 'execution id']);
+  const orderIdIdx = headerIndex(headers, ['order_id', 'order id', 'orderid', 'order_no', 'order no', 'order number']);
+  const exchangeIdIdx = headerIndex(headers, [
+    'exchange_order_id',
+    'exchange order id',
+    'exch_order_id',
+    'exchange_order_no'
+  ]);
   const notesIdx = headerIndex(headers, ['notes', 'note', 'remarks']);
 
   if (symbolIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
@@ -526,6 +606,11 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
     const price = Number(row[priceIdx]);
     const tradeDate = coerceDate(dateIdx >= 0 ? row[dateIdx] : '');
     const notes = notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '';
+    const importId = buildImportId(
+      coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
+      coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
+      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+    );
 
     if (!symbol || !Number.isFinite(quantity) || !Number.isFinite(price)) {
       invalid.push({ row: index + headerRowIndex + 2, reason: 'Missing symbol/qty/price' });
@@ -540,7 +625,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
       notes,
-      companyName: companyName || undefined
+      companyName: companyName || undefined,
+      importId
     });
   });
 
@@ -573,6 +659,32 @@ async function parseTradeFile(file: File, userId: string): Promise<CsvAnalysis> 
     throw new Error('Unsupported Excel format. Please upload a broker tradebook file.');
   }
   return combined;
+}
+
+function dedupeImportRows(
+  rows: ImportTrade[],
+  existingTrades: TradeRecord[]
+): { rows: ImportTrade[]; duplicateCount: number } {
+  const { byImportId, bySignature } = buildDedupeKeys(existingTrades);
+  let duplicateCount = 0;
+  const next: ImportTrade[] = [];
+  rows.forEach((row) => {
+    const signature = buildTradeSignature(row.symbol, row.side, row.quantity, row.price, row.tradeDate);
+    const importId = row.importId;
+    const isDuplicate = importId
+      ? byImportId.has(importId) || bySignature.has(signature)
+      : bySignature.has(signature);
+    if (isDuplicate) {
+      duplicateCount += 1;
+      return;
+    }
+    next.push(row);
+    if (importId) {
+      byImportId.add(importId);
+    }
+    bySignature.add(signature);
+  });
+  return { rows: next, duplicateCount };
 }
 
 function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
@@ -4900,26 +5012,32 @@ export function renderTradesView(root: HTMLElement): void {
           }
         });
         saveImportConfidence(confidenceMap);
+        const { rows: dedupedRows, duplicateCount } = dedupeImportRows(analysis.valid, trades);
+        if (!dedupedRows.length) {
+          renderImportReport(failureMap.size ? Array.from(failureMap.values()) : [], Array.from(lowConfidenceMap.values()));
+          showAlert(feedback, 'warning', 'All rows are duplicates. No new trades imported.');
+          return;
+        }
         const failures = Array.from(failureMap.values());
         const lowConfidence = Array.from(lowConfidenceMap.values());
         const failedCount = failures.reduce((sum, item) => sum + item.count, 0);
         const ok = await confirmAction({
           title: 'Import Trades',
-          message: `Import ${analysis.valid.length} trades from this file?${
+          message: `Import ${dedupedRows.length} trades from this file?${
             mappedCount ? ` (${mappedCount} symbols auto-mapped)` : ''
           }${failedCount ? ` (${failedCount} trades unmapped)` : ''}${
             lowConfidence.length ? ` (${lowConfidence.length} low confidence)` : ''
-          }`,
+          }${duplicateCount ? ` (${duplicateCount} duplicates skipped)` : ''}`,
           confirmLabel: 'Import'
         });
         if (!ok) return;
-        await Promise.all(analysis.valid.map(({ companyName: _companyName, ...row }) => addTrade(row)));
+        await Promise.all(dedupedRows.map(({ companyName: _companyName, ...row }) => addTrade(row)));
         await refreshData();
         await queueAndSync();
         showAlert(
           feedback,
           'success',
-          `Imported ${analysis.valid.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
+          `Imported ${dedupedRows.length} trades${analysis.invalid.length ? ` (${analysis.invalid.length} invalid rows skipped).` : '.'}`
         );
         renderImportReport(failures, lowConfidence);
         if (tradeImportLabel) {
@@ -4929,12 +5047,13 @@ export function renderTradesView(root: HTMLElement): void {
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
           fileName: file.name,
-          totalRows: analysis.valid.length + analysis.invalid.length,
-          validCount: analysis.valid.length,
+          totalRows: dedupedRows.length + analysis.invalid.length,
+          validCount: dedupedRows.length,
           invalidCount: analysis.invalid.length,
           mappedCount,
           failedCount,
           lowConfidenceCount: lowConfidence.length,
+          duplicateCount,
           status: 'imported'
         });
       } catch (error) {

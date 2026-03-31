@@ -19,6 +19,7 @@ export type TradeRecord = {
   quantity: number;
   price: number;
   tradeDate: string;
+  importId?: string;
   exitPrice?: number | null;
   notes?: string;
   createdAt: string;

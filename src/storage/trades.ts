@@ -9,6 +9,7 @@ export type TradeInput = {
   quantity: number;
   price: number;
   tradeDate: string;
+  importId?: string;
   exitPrice?: number | null;
   notes?: string;
 };
