@@ -736,7 +736,7 @@ export function renderDashboardView(root: HTMLElement): void {
                 color: axisTick,
                 maxTicksLimit: 6,
                 callback: (value, index) => tickFormatter(value, index),
-                font: { size: 11, weight: '600' }
+                font: { size: 11, weight: 600 }
               }
             },
             y: {
@@ -746,7 +746,7 @@ export function renderDashboardView(root: HTMLElement): void {
               ticks: {
                 color: axisTick,
                 callback: (val) => formatCompactMoney(Number(val)),
-                font: { size: 11, weight: '600' }
+                font: { size: 11, weight: 600 }
               }
             }
           }
@@ -891,12 +891,12 @@ export function renderDashboardView(root: HTMLElement): void {
               ticks: {
                 color: dark ? '#94a3b8' : '#64748b',
                 callback: (val) => formatMoney(Number(val)),
-                font: { size: 11, weight: '600' }
+                font: { size: 11, weight: 600 }
               }
             },
             y: {
               grid: { display: false },
-              ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 11, weight: '600' } }
+              ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 11, weight: 600 } }
             }
           }
         }

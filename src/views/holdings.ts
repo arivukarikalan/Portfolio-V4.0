@@ -498,9 +498,9 @@ export function renderHoldingsView(root: HTMLElement): void {
             scales: {
               x: {
                 grid: { color: gridColor },
-                ticks: { color: axisTick, callback: (val) => `${val} d`, font: { size: 11, weight: '600' } }
+                ticks: { color: axisTick, callback: (val) => `${val} d`, font: { size: 11, weight: 600 } }
               },
-              y: { grid: { display: false }, ticks: { color: axisTick, font: { size: 11, weight: '600' } } }
+              y: { grid: { display: false }, ticks: { color: axisTick, font: { size: 11, weight: 600 } } }
             }
           }
         });
