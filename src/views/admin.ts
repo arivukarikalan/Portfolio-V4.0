@@ -223,14 +223,23 @@ export function renderAdminView(root: HTMLElement): void {
       quickNav: adminQuickNav,
       quickNavActive: initialTab,
       content: `
-        <div id="admin-feedback" class="alert d-none" role="alert"></div>
+        <div class="admin-page">
+          <div id="admin-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="row g-3 mb-3">
+          <div class="card admin-hero shadow-sm border-0">
+            <div class="card-body">
+              <div class="admin-eyebrow">Operations</div>
+              <h2 class="h5 mb-1 section-title">Admin Control</h2>
+              <div class="text-muted small">Approve users, manage system settings, and review platform activity.</div>
+            </div>
+          </div>
+
+          <div class="row g-3">
           <div class="col-sm-6 col-xl-3">
-            <div class="card shadow-sm border-0">
+            <div class="card shadow-sm border-0 admin-kpi-card">
               <div class="card-body d-flex align-items-center justify-content-between">
                 <div>
-                  <div class="text-muted small">Pending Requests</div>
+                  <div class="text-muted small admin-kpi-label">Pending Requests</div>
                   <div class="h5 mb-0" id="kpi-pending">--</div>
                 </div>
                 <span class="text-primary">${lucideIcon('user-check')}</span>
@@ -238,10 +247,10 @@ export function renderAdminView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-sm-6 col-xl-3">
-            <div class="card shadow-sm border-0">
+            <div class="card shadow-sm border-0 admin-kpi-card">
               <div class="card-body d-flex align-items-center justify-content-between">
                 <div>
-                  <div class="text-muted small">Active Users</div>
+                  <div class="text-muted small admin-kpi-label">Active Users</div>
                   <div class="h5 mb-0" id="kpi-active">--</div>
                 </div>
                 <span class="text-success">${lucideIcon('users')}</span>
@@ -249,10 +258,10 @@ export function renderAdminView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-sm-6 col-xl-3">
-            <div class="card shadow-sm border-0">
+            <div class="card shadow-sm border-0 admin-kpi-card">
               <div class="card-body d-flex align-items-center justify-content-between">
                 <div>
-                  <div class="text-muted small">NSE Master</div>
+                  <div class="text-muted small admin-kpi-label">NSE Master</div>
                   <div class="h5 mb-0" id="kpi-nse">--</div>
                 </div>
                 <span class="text-info">${lucideIcon('database')}</span>
@@ -260,30 +269,28 @@ export function renderAdminView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-sm-6 col-xl-3">
-            <div class="card shadow-sm border-0">
+            <div class="card shadow-sm border-0 admin-kpi-card">
               <div class="card-body d-flex align-items-center justify-content-between">
                 <div>
-                  <div class="text-muted small">Snapshot Limit</div>
+                  <div class="text-muted small admin-kpi-label">Snapshot Limit</div>
                   <div class="h5 mb-0" id="kpi-snapshots">--</div>
                 </div>
                 <span class="text-warning">${lucideIcon('archive')}</span>
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="tab-content">
+          <div class="tab-content">
           <section class="tab-pane show active" id="admin-tab-users" data-admin-panel="users">
             <div class="row g-3">
               <div class="col-12 col-xl-5">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 admin-section-card">
                   <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                       <div>
-                        <h2 class="h6 mb-0 section-title">
-                          <span class="section-icon">${lucideIcon('user-plus')}</span>
-                          Pending Requests
-                        </h2>
+                        <div class="admin-eyebrow">Approvals</div>
+                        <h2 class="h6 mb-0 section-title">Pending Requests</h2>
                         <div class="text-muted small" id="pending-count">Loading...</div>
                       </div>
                       <button class="btn btn-sm btn-outline-primary" id="pending-refresh">Refresh</button>
@@ -305,14 +312,12 @@ export function renderAdminView(root: HTMLElement): void {
                 </div>
               </div>
               <div class="col-12 col-xl-7">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 admin-section-card">
                   <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                       <div>
-                        <h2 class="h6 mb-0 section-title">
-                          <span class="section-icon">${lucideIcon('user-check')}</span>
-                          Approved Users
-                        </h2>
+                        <div class="admin-eyebrow">Directory</div>
+                        <h2 class="h6 mb-0 section-title">Approved Users</h2>
                         <div class="text-muted small" id="users-count">Loading...</div>
                       </div>
                       <button class="btn btn-sm btn-outline-primary" id="users-refresh">Refresh</button>
@@ -340,12 +345,10 @@ export function renderAdminView(root: HTMLElement): void {
           <section class="tab-pane" id="admin-tab-system" data-admin-panel="system">
             <div class="row g-3">
               <div class="col-xl-6">
-                <div class="card shadow-sm border-0">
+                <div class="card shadow-sm border-0 admin-section-card">
                   <div class="card-body">
-                    <h2 class="h6 mb-3 section-title">
-                      <span class="section-icon">${lucideIcon('sliders')}</span>
-                      Sync &amp; Limits
-                    </h2>
+                    <div class="admin-eyebrow">Config</div>
+                    <h2 class="h6 mb-3 section-title">Sync &amp; Limits</h2>
                     <div class="row g-3">
                       <div class="col-md-6">
                         <label class="form-label">Live price interval (sec)</label>
@@ -381,12 +384,10 @@ export function renderAdminView(root: HTMLElement): void {
                 </div>
               </div>
               <div class="col-xl-6">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 admin-section-card">
                   <div class="card-body">
-                    <h2 class="h6 mb-3 section-title">
-                      <span class="section-icon">${lucideIcon('activity')}</span>
-                      System Summary
-                    </h2>
+                    <div class="admin-eyebrow">Summary</div>
+                    <h2 class="h6 mb-3 section-title">System Summary</h2>
                     <div class="d-flex flex-column gap-2">
                       <div class="d-flex align-items-center justify-content-between">
                         <span class="text-muted">Active Users</span>
@@ -410,12 +411,10 @@ export function renderAdminView(root: HTMLElement): void {
           <section class="tab-pane" id="admin-tab-tickers" data-admin-panel="tickers">
             <div class="row g-3">
               <div class="col-xl-5">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 admin-section-card">
                   <div class="card-body">
-                    <h2 class="h6 mb-3 section-title">
-                      <span class="section-icon">${lucideIcon('database')}</span>
-                      NSE Master Summary
-                    </h2>
+                    <div class="admin-eyebrow">Reference Data</div>
+                    <h2 class="h6 mb-3 section-title">NSE Master Summary</h2>
                     <div class="d-flex align-items-center justify-content-between mb-2">
                       <span class="text-muted">Total tickers</span>
                       <strong id="nse-total">--</strong>
@@ -436,12 +435,10 @@ export function renderAdminView(root: HTMLElement): void {
                 </div>
               </div>
               <div class="col-xl-7">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 admin-section-card">
                   <div class="card-body">
-                    <h2 class="h6 mb-3 section-title">
-                      <span class="section-icon">${lucideIcon('upload')}</span>
-                      Upload NSE Master
-                    </h2>
+                    <div class="admin-eyebrow">Import</div>
+                    <h2 class="h6 mb-3 section-title">Upload NSE Master</h2>
                     <div class="d-flex flex-column gap-2">
                       <input class="form-control" type="file" accept=".csv" id="nse-file" />
                       <div class="text-muted small" id="nse-file-status">
@@ -459,14 +456,12 @@ export function renderAdminView(root: HTMLElement): void {
             </div>
             <div class="row g-3 mt-1">
               <div class="col-12">
-                <div class="card shadow-sm border-0">
+                <div class="card shadow-sm border-0 admin-section-card">
                   <div class="card-body">
                     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
                       <div>
-                        <h2 class="h6 mb-0 section-title">
-                          <span class="section-icon">${lucideIcon('send')}</span>
-                          Ticker Requests
-                        </h2>
+                        <div class="admin-eyebrow">Queue</div>
+                        <h2 class="h6 mb-0 section-title">Ticker Requests</h2>
                         <div class="text-muted small" id="ticker-req-count">Loading...</div>
                       </div>
                       <button class="btn btn-sm btn-outline-primary" id="ticker-req-refresh">Refresh</button>
@@ -495,14 +490,12 @@ export function renderAdminView(root: HTMLElement): void {
           </section>
 
           <section class="tab-pane" id="admin-tab-logs" data-admin-panel="logs">
-            <div class="card shadow-sm border-0">
+            <div class="card shadow-sm border-0 admin-section-card">
               <div class="card-body">
                 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
                   <div>
-                    <h2 class="h6 mb-0 section-title">
-                      <span class="section-icon">${lucideIcon('list')}</span>
-                      Activity Log
-                    </h2>
+                    <div class="admin-eyebrow">Audit Trail</div>
+                    <h2 class="h6 mb-0 section-title">Activity Log</h2>
                     <div class="text-muted small">Recent admin actions stored locally.</div>
                   </div>
                   <button class="btn btn-outline-danger btn-sm" id="logs-clear">Clear Logs</button>
@@ -520,6 +513,7 @@ export function renderAdminView(root: HTMLElement): void {
               </div>
             </div>
           </section>
+        </div>
         </div>
       `
     });

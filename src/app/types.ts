@@ -3,6 +3,7 @@ export type AppView =
   | 'dashboard'
   | 'holdings'
   | 'trades'
+  | 'exit-strategy'
   | 'insights'
   | 'target'
   | 'transactions'

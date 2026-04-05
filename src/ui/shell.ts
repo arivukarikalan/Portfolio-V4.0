@@ -20,10 +20,19 @@ type QuickNavItem = {
   icon?: string;
 };
 
+type MobilePrimaryNavItem = {
+  id: string;
+  label: string;
+  href?: string;
+  icon: string;
+  action?: 'menu';
+};
+
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: 'dashboard.html' },
   { id: 'holdings', label: 'Holdings', icon: 'pie-chart', href: 'holdings.html' },
   { id: 'trades', label: 'Trades', icon: 'repeat', href: 'trades.html' },
+  { id: 'exit-strategy', label: 'Exit Strategy', icon: 'crosshair', href: 'exit-strategy.html' },
   { id: 'insights', label: 'Insights', icon: 'lightbulb', href: 'insights.html' },
   { id: 'target', label: 'Target Planner', icon: 'target', href: 'target.html' },
   { id: 'transactions', label: 'Transactions', icon: 'arrow-right-left', href: 'transactions.html' },
@@ -34,7 +43,14 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'settings', label: 'Settings', icon: 'settings', href: 'settings.html' }
 ];
 
-const QUICK_NAV_IDS = ['dashboard', 'holdings', 'trades', 'insights', 'target'];
+const QUICK_NAV_IDS = ['dashboard', 'holdings', 'trades', 'exit-strategy', 'target'];
+const MOBILE_PRIMARY_NAV: MobilePrimaryNavItem[] = [
+  { id: 'dashboard', label: 'Home', href: 'dashboard.html', icon: 'layout-dashboard' },
+  { id: 'holdings', label: 'Holdings', href: 'holdings.html', icon: 'pie-chart' },
+  { id: 'trades', label: 'Trades', href: 'trades.html', icon: 'repeat' },
+  { id: 'target', label: 'Target', href: 'target.html', icon: 'target' },
+  { id: 'more', label: 'More', icon: 'menu', action: 'menu' }
+];
 
 function initialsFor(name: string): string {
   const clean = String(name || '').trim();
@@ -53,10 +69,14 @@ export function renderShell(options: {
   quickNavActive?: string;
   content: string;
 }): string {
-  const { session, active, subtitle, content, quickNav, quickNavActive } = options;
+  const { session, active, title, subtitle, content, quickNav, quickNavActive } = options;
   const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || session.role === 'ADMIN');
   const quickItems = navItems.filter((item) => QUICK_NAV_IDS.includes(item.id));
   const initials = initialsFor(session.name);
+  const useMobileSubNav = ['trades', 'transactions', 'admin'].includes(active) && Boolean(quickNav?.length);
+  const mobilePrimaryActiveId = MOBILE_PRIMARY_NAV.some((item) => item.id === quickNavActive) ? quickNavActive || active : active;
+  const isMobilePrimaryActive = (id: string) => mobilePrimaryActiveId === id;
+  const mobileHasPrimaryActive = MOBILE_PRIMARY_NAV.some((item) => item.id !== 'more' && isMobilePrimaryActive(item.id));
 
   const navMarkup = navItems
     .map((item) => {
@@ -93,13 +113,32 @@ export function renderShell(options: {
     })
     .join('');
 
-  const mobileQuickNavMarkup = quickNavItems
+  const mobileQuickNavMarkup = MOBILE_PRIMARY_NAV.map((item) => {
+    const isActive = item.id === 'more' ? !mobileHasPrimaryActive : isMobilePrimaryActive(item.id);
+    const iconName = item.icon || 'circle';
+    if (item.action === 'menu') {
+      return `
+        <button class="mobile-nav-item mobile-primary-nav-item ${isActive ? 'active' : ''}" type="button" data-mobile-action="menu" aria-label="${item.label}">
+          <span class="mobile-nav-icon">${lucideIcon(iconName)}</span>
+          <span class="mobile-nav-label">${item.label}</span>
+        </button>
+      `;
+    }
+    return `
+      <a class="mobile-nav-item mobile-primary-nav-item ${isActive ? 'active' : ''}" data-quick-id="${item.id}" href="${item.href}">
+        <span class="mobile-nav-icon">${lucideIcon(iconName)}</span>
+        <span class="mobile-nav-label">${item.label}</span>
+      </a>
+    `;
+  }).join('');
+
+  const mobileSubNavMarkup = quickNavItems
     .map((item) => {
       const isActive = (quickNavActive || active) === item.id;
       const tabAttr = item.adminTab ? `data-admin-tab="${item.adminTab}"` : '';
       const iconName = item.icon || 'circle';
       return `
-        <a class="mobile-nav-item ${isActive ? 'active' : ''}" data-quick-id="${item.id}" ${tabAttr} href="${item.href}">
+        <a class="mobile-nav-item mobile-subnav-item ${isActive ? 'active' : ''}" data-quick-id="${item.id}" ${tabAttr} href="${item.href}">
           <span class="mobile-nav-icon">${lucideIcon(iconName)}</span>
           <span class="mobile-nav-label">${item.label}</span>
         </a>
@@ -117,8 +156,9 @@ export function renderShell(options: {
               ${lucideIcon('menu')}
             </button>
             <img src="${logoUrl}" alt="${APP_NAME}" width="36" height="36" class="rounded-3 border" />
-            <div>
-              <div class="fw-semibold">${APP_NAME}</div>
+            <div class="app-topbar-copy">
+              <div class="app-topbar-title">${title}</div>
+              <div class="app-topbar-subtitle">${APP_NAME}</div>
             </div>
           </div>
           <div class="d-none d-md-flex align-items-center gap-2 bg-light rounded-pill px-2 py-1 quick-nav app-topbar-quicknav">
@@ -126,7 +166,7 @@ export function renderShell(options: {
           </div>
             <div class="d-flex align-items-center gap-2 app-topbar-actions">
               <div class="sync-indicator" id="sync-indicator" data-status="idle">Synced</div>
-              <a class="btn nav-icon-btn" href="settings.html" aria-label="Settings">
+              <a class="btn nav-icon-btn d-none d-md-inline-flex" href="settings.html" aria-label="Settings">
                 ${lucideIcon('settings')}
               </a>
             <div class="position-relative">
@@ -256,8 +296,8 @@ export function renderShell(options: {
       </div>
 
       <nav class="mobile-bottom-nav d-lg-none">
-        <div class="mobile-bottom-nav-inner">
-          ${mobileQuickNavMarkup}
+        <div class="mobile-bottom-nav-inner ${useMobileSubNav ? 'mobile-bottom-nav-inner-subnav' : ''}">
+          ${useMobileSubNav ? mobileSubNavMarkup : mobileQuickNavMarkup}
         </div>
       </nav>
     </div>
@@ -281,10 +321,15 @@ export function bindShell(root: HTMLElement, session: UserSession): void {
   const profileCompact = root.querySelector<HTMLInputElement>('#profile-compact');
   const profileAnimations = root.querySelector<HTMLInputElement>('#profile-animations');
   const mobileQuickNav = root.querySelector<HTMLElement>('.mobile-bottom-nav');
+  const mobileMenuToggle = root.querySelector<HTMLButtonElement>('[data-mobile-action="menu"]');
 
   const closeSidebar = () => {
     sidebar?.classList.remove('show');
     sidebarBackdrop?.classList.remove('show');
+  };
+  const openSidebar = () => {
+    sidebar?.classList.add('show');
+    sidebarBackdrop?.classList.add('show');
   };
   const closeSyncPanel = () => {
     syncPanel?.classList.remove('show');
@@ -293,11 +338,16 @@ export function bindShell(root: HTMLElement, session: UserSession): void {
   };
 
   sidebarToggle?.addEventListener('click', () => {
-    sidebar?.classList.toggle('show');
-    sidebarBackdrop?.classList.toggle('show');
+    sidebar?.classList.contains('show') ? closeSidebar() : openSidebar();
   });
+  mobileMenuToggle?.addEventListener('click', () => openSidebar());
 
   sidebarBackdrop?.addEventListener('click', closeSidebar);
+  sidebar?.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest('a.nav-link')) return;
+    closeSidebar();
+  });
   syncPanelToggle?.addEventListener('click', () => {
     syncPanel?.classList.toggle('show');
     syncPanelBackdrop?.classList.toggle('show');

@@ -152,6 +152,46 @@ export type ReentryPlan = {
   closedAt?: string | null;
 };
 
+export type ExitStrategyMode = 'REENTRY' | 'SWAP' | 'INTRADAY';
+
+export type ExitStrategySourceLeg = {
+  id: string;
+  tradeId?: string;
+  symbol: string;
+  quantity: number;
+  sellPrice: number;
+  avgCost: number;
+  realizedLoss: number;
+  tradeDate: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExitStrategyEntryLeg = {
+  id: string;
+  tradeId?: string;
+  symbol: string;
+  quantity: number;
+  buyPrice: number;
+  tradeDate: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExitStrategyScenario = {
+  id: string;
+  userId: string;
+  mode: ExitStrategyMode;
+  name?: string;
+  status: 'ACTIVE' | 'CLOSED';
+  sourceLegs: ExitStrategySourceLeg[];
+  entryLegs: ExitStrategyEntryLeg[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+};
+
 export type UserSettings = {
   userId: string;
   maxAllocationPct: number;
@@ -193,4 +233,5 @@ export type SnapshotPayload = {
   mappingOverrides?: MappingOverrideMap;
   recoveryPlans?: RecoveryPlan[];
   reentryPlans?: ReentryPlan[];
+  exitStrategies?: ExitStrategyScenario[];
 };

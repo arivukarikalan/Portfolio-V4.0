@@ -166,23 +166,24 @@ export function renderFinanceView(root: HTMLElement): void {
       title: 'Finance Dashboard',
       subtitle: 'Track net worth, cashflow, and financial goals in one place.',
       content: `
-        <div id="finance-feedback" class="alert d-none" role="alert"></div>
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <h2 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('wallet')}</span>
-              Finance Dashboard
-            </h2>
-            <div class="text-muted small">Net worth growth, cashflow insights, and future plans.</div>
+        <div class="finance-page">
+          <div id="finance-feedback" class="alert d-none" role="alert"></div>
+          <div class="card finance-hero shadow-sm border-0">
+            <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div>
+                <div class="finance-eyebrow">Money Snapshot</div>
+                <h2 class="h5 mb-1 section-title">Finance Dashboard</h2>
+                <div class="text-muted small">Net worth growth, cashflow insights, and future plans.</div>
+              </div>
+              <button class="btn btn-outline-secondary btn-sm" id="finance-sync">
+                ${lucideIcon('refresh-ccw')} Sync
+              </button>
+            </div>
           </div>
-          <button class="btn btn-outline-secondary btn-sm" id="finance-sync">
-            ${lucideIcon('refresh-ccw')} Sync
-          </button>
-        </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon rose">${lucideIcon('sparkles')}</span>
@@ -193,7 +194,7 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('banknote')}</span>
@@ -204,7 +205,7 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon indigo">${lucideIcon('trending-up')}</span>
@@ -215,7 +216,7 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon amber">${lucideIcon('hand-coins')}</span>
@@ -226,7 +227,7 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('wallet')}</span>
@@ -237,7 +238,7 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-xl-2">
-            <div class="card shadow-sm border-0 h-100 finance-kpi">
+            <div class="card shadow-sm border-0 h-100 finance-kpi finance-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon rose">${lucideIcon('activity')}</span>
@@ -247,19 +248,22 @@ export function renderFinanceView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-lg-8">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-networth-card">
               <div class="card-body">
-                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
                   <div>
-                    <h3 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('line-chart')}</span>
-                      Net Worth Trend
-                    </h3>
-                    <div class="text-muted small" id="finance-networth-meta">Last refresh: --</div>
+                    <div class="finance-networth-kicker">Net Worth</div>
+                    <div class="finance-networth-value" id="finance-networth-value">--</div>
+                    <div class="d-flex flex-wrap align-items-center gap-2 finance-networth-change-row">
+                      <span class="finance-networth-change" id="finance-networth-change">--</span>
+                      <span class="finance-networth-change-pct" id="finance-networth-change-pct">--</span>
+                      <span class="finance-networth-period" id="finance-networth-period">vs selected range</span>
+                    </div>
+                    <div class="text-muted small mt-1" id="finance-networth-meta">Last refresh: --</div>
                   </div>
                   <div class="btn-group btn-group-sm finance-range" role="group">
                     ${rangeOptions
@@ -270,20 +274,20 @@ export function renderFinanceView(root: HTMLElement): void {
                       .join('')}
                   </div>
                 </div>
-                <div class="finance-chart-wrap finance-chart-lg">
+                <div class="finance-chart-wrap finance-chart-lg finance-networth-plot">
                   <canvas id="finance-networth-chart" height="140"></canvas>
+                  <div class="finance-chart-hoverline d-none" id="finance-networth-hoverline"></div>
+                  <div class="finance-chart-tooltip d-none" id="finance-networth-tooltip"></div>
                   <div class="chart-empty text-muted small d-none" id="finance-networth-empty">No data yet.</div>
                 </div>
               </div>
             </div>
           </div>
           <div class="col-lg-4">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-section-card">
               <div class="card-body">
-                <h3 class="h6 mb-1 section-title">
-                  <span class="section-icon">${lucideIcon('pie-chart')}</span>
-                  Expense Breakdown
-                </h3>
+                <div class="finance-eyebrow">Spending</div>
+                <h3 class="h6 mb-1 section-title">Expense Breakdown</h3>
                 <div class="text-muted small mb-2">Top categories this period.</div>
                 <div class="finance-chart-wrap finance-chart-sm">
                   <canvas id="finance-expense-chart" height="180"></canvas>
@@ -293,18 +297,16 @@ export function renderFinanceView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-lg-7">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-section-card">
               <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
                   <div>
-                    <h3 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('bar-chart-3')}</span>
-                      Income vs Expense vs Savings
-                    </h3>
+                    <div class="finance-eyebrow">Cashflow</div>
+                    <h3 class="h6 mb-1 section-title">Income vs Expense vs Savings</h3>
                     <div class="text-muted small">Monthly cashflow summary.</div>
                   </div>
                 </div>
@@ -316,12 +318,10 @@ export function renderFinanceView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-lg-5">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-section-card">
               <div class="card-body">
-                <h3 class="h6 mb-1 section-title">
-                  <span class="section-icon">${lucideIcon('handshake')}</span>
-                  Debt & Lending Overview
-                </h3>
+                <div class="finance-eyebrow">Obligations</div>
+                <h3 class="h6 mb-1 section-title">Debt & Lending Overview</h3>
                 <div class="finance-debt-grid">
                   <div class="finance-debt-card">
                     <div class="label">Borrowed Outstanding</div>
@@ -338,34 +338,30 @@ export function renderFinanceView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3">
+          <div class="row g-3">
           <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-section-card">
               <div class="card-body">
-                <h3 class="h6 mb-2 section-title">
-                  <span class="section-icon">${lucideIcon('repeat')}</span>
-                  Recurring Payments
-                </h3>
+                <div class="finance-eyebrow">Automation</div>
+                <h3 class="h6 mb-2 section-title">Recurring Payments</h3>
                 <div class="text-muted small mb-2" id="finance-recurring-meta">--</div>
                 <div class="finance-list" id="finance-recurring-list"></div>
               </div>
             </div>
           </div>
           <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 finance-section-card">
               <div class="card-body">
-                <h3 class="h6 mb-2 section-title">
-                  <span class="section-icon">${lucideIcon('flag')}</span>
-                  Goals & Plans
-                </h3>
+                <div class="finance-eyebrow">Planning</div>
+                <h3 class="h6 mb-2 section-title">Goals & Plans</h3>
                 <div class="finance-goal-meta mb-2" id="finance-goal-meta">--</div>
                 <div class="finance-list" id="finance-goal-list"></div>
               </div>
             </div>
           </div>
-        </div>
+          </div>
         </div>
       `
     });
@@ -381,8 +377,14 @@ export function renderFinanceView(root: HTMLElement): void {
     const kpiDebt = root.querySelector<HTMLElement>('#finance-kpi-debt');
     const kpiLent = root.querySelector<HTMLElement>('#finance-kpi-lent');
     const kpiCashflow = root.querySelector<HTMLElement>('#finance-kpi-cashflow');
+    const networthValue = root.querySelector<HTMLElement>('#finance-networth-value');
+    const networthChange = root.querySelector<HTMLElement>('#finance-networth-change');
+    const networthChangePct = root.querySelector<HTMLElement>('#finance-networth-change-pct');
+    const networthPeriod = root.querySelector<HTMLElement>('#finance-networth-period');
     const networthMeta = root.querySelector<HTMLElement>('#finance-networth-meta');
     const networthCanvas = root.querySelector<HTMLCanvasElement>('#finance-networth-chart');
+    const networthHoverline = root.querySelector<HTMLDivElement>('#finance-networth-hoverline');
+    const networthTooltip = root.querySelector<HTMLDivElement>('#finance-networth-tooltip');
     const networthEmpty = root.querySelector<HTMLDivElement>('#finance-networth-empty');
     const expenseCanvas = root.querySelector<HTMLCanvasElement>('#finance-expense-chart');
     const expenseEmpty = root.querySelector<HTMLDivElement>('#finance-expense-empty');
@@ -409,8 +411,14 @@ export function renderFinanceView(root: HTMLElement): void {
       !kpiDebt ||
       !kpiLent ||
       !kpiCashflow ||
+      !networthValue ||
+      !networthChange ||
+      !networthChangePct ||
+      !networthPeriod ||
       !networthMeta ||
       !networthCanvas ||
+      !networthHoverline ||
+      !networthTooltip ||
       !networthEmpty ||
       !expenseCanvas ||
       !expenseEmpty ||
@@ -434,6 +442,39 @@ export function renderFinanceView(root: HTMLElement): void {
     let expenseChart: ChartJS | null = null;
     let cashflowChart: ChartJS | null = null;
     let rangeSelection = '1y';
+
+    const networthHoverGuide = {
+      id: 'networthHoverGuide',
+      afterDatasetsDraw(chart: ChartJS<'line'>) {
+        const active = chart.tooltip?.getActiveElements?.() || [];
+        if (!active.length) return;
+        const { ctx, chartArea } = chart;
+        const x = active[0]?.element?.x;
+        if (!x || !chartArea) return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top + 4);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    const hideNetworthTooltip = () => {
+      networthHoverline.classList.add('d-none');
+      networthTooltip.classList.add('d-none');
+    };
+
+    const setNetworthChangeTone = (delta: number) => {
+      networthChange.classList.remove('is-positive', 'is-negative');
+      networthChangePct.classList.remove('is-positive', 'is-negative');
+      const toneClass = delta >= 0 ? 'is-positive' : 'is-negative';
+      networthChange.classList.add(toneClass);
+      networthChangePct.classList.add(toneClass);
+    };
 
     const buildBuckets = (transactions: TransactionRecord[]): MonthBucket[] => {
       const map = new Map<string, MonthBucket>();
@@ -524,14 +565,38 @@ export function renderFinanceView(root: HTMLElement): void {
         if (cashflowChart) cashflowChart.destroy();
         networthChart = null;
         cashflowChart = null;
+        networthValue.textContent = '--';
+        networthChange.textContent = '--';
+        networthChangePct.textContent = '--';
+        networthPeriod.textContent = 'No data yet';
+        hideNetworthTooltip();
         return;
       }
       networthEmpty.classList.add('d-none');
       cashflowEmpty.classList.add('d-none');
 
       const networthSeries = computeNetworthSeries(buckets, holdingsValue).slice(startIndex);
+      const visibleStart = Number(networthSeries[0] || 0);
+      const visibleEnd = Number(networthSeries[networthSeries.length - 1] || 0);
+      const visibleDelta = visibleEnd - visibleStart;
+      const visibleDeltaPct = visibleStart !== 0 ? (visibleDelta / Math.abs(visibleStart)) * 100 : 0;
+      const positiveTrend = visibleDelta >= 0;
+      const lineColor = positiveTrend ? '#00b386' : '#ef4444';
+      const fillTop = positiveTrend ? 'rgba(0, 179, 134, 0.14)' : 'rgba(239, 68, 68, 0.12)';
+      const fillBottom = positiveTrend ? 'rgba(0, 179, 134, 0.01)' : 'rgba(239, 68, 68, 0.01)';
+
+      networthValue.textContent = formatMoney(visibleEnd);
+      networthChange.textContent = `${visibleDelta >= 0 ? '+' : '-'}${formatMoney(Math.abs(visibleDelta))}`;
+      networthChangePct.textContent = `${visibleDeltaPct >= 0 ? '+' : '-'}${Math.abs(visibleDeltaPct).toFixed(2)}%`;
+      networthPeriod.textContent = `vs ${labels[0]}${labels.length > 1 ? ` to ${labels[labels.length - 1]}` : ''}`;
+      setNetworthChangeTone(visibleDelta);
 
       if (networthChart) networthChart.destroy();
+      const networthGradient = networthCanvas.getContext('2d')?.createLinearGradient(0, 0, 0, networthCanvas.height);
+      if (networthGradient) {
+        networthGradient.addColorStop(0, fillTop);
+        networthGradient.addColorStop(1, fillBottom);
+      }
       const networthConfig: ChartConfiguration<'line'> = {
         type: 'line',
         data: {
@@ -541,9 +606,15 @@ export function renderFinanceView(root: HTMLElement): void {
               label: 'Net Worth',
               data: networthSeries,
               fill: true,
-              borderColor: '#0ea5e9',
-              backgroundColor: 'rgba(14, 165, 233, 0.12)',
-              tension: 0.3
+              borderColor: lineColor,
+              backgroundColor: networthGradient || fillTop,
+              borderWidth: 3,
+              pointRadius: 0,
+              pointHoverRadius: 5,
+              pointHoverBorderWidth: 2,
+              pointHoverBorderColor: '#ffffff',
+              pointHoverBackgroundColor: lineColor,
+              tension: 0.35
             }
           ]
         },
@@ -554,20 +625,56 @@ export function renderFinanceView(root: HTMLElement): void {
           plugins: {
             legend: { display: false },
             tooltip: {
-              callbacks: {
-                label: (context) => formatMoney(Number(context.parsed.y) || 0)
+              enabled: false,
+              external: ({ chart, tooltip }) => {
+                if (!tooltip || tooltip.opacity === 0) {
+                  hideNetworthTooltip();
+                  return;
+                }
+                const point = tooltip.dataPoints?.[0];
+                if (!point) {
+                  hideNetworthTooltip();
+                  return;
+                }
+                const plot = chart.canvas.parentElement;
+                if (!plot) {
+                  hideNetworthTooltip();
+                  return;
+                }
+                const label = String(point.label || '');
+                const value = Number(point.parsed.y) || 0;
+                const left = tooltip.caretX;
+                const top = Math.max(12, tooltip.caretY - 54);
+                networthTooltip.innerHTML = `
+                  <div class="finance-chart-tooltip-date">${label}</div>
+                  <div class="finance-chart-tooltip-value">${formatMoney(value)}</div>
+                `;
+                networthTooltip.style.left = `${Math.min(Math.max(left, 64), plot.clientWidth - 64)}px`;
+                networthTooltip.style.top = `${top}px`;
+                networthTooltip.classList.remove('d-none');
+                networthHoverline.style.left = `${left}px`;
+                networthHoverline.classList.remove('d-none');
               }
             }
           },
           scales: {
-            x: { grid: { display: false } },
-            y: {
+            x: {
+              grid: { display: false },
+              border: { display: false },
               ticks: {
-                callback: (value) => formatMoney(Number(value) || 0)
+                color: '#94a3b8',
+                maxTicksLimit: 6,
+                font: { size: 11 }
               }
+            },
+            y: {
+              display: false,
+              grid: { display: false },
+              border: { display: false }
             }
           }
-        }
+        },
+        plugins: [networthHoverGuide]
       };
       networthChart = new Chart(networthCanvas, networthConfig);
 
@@ -736,7 +843,7 @@ export function renderFinanceView(root: HTMLElement): void {
     const renderGoals = (
       goals: GoalPlan[],
       transactions: TransactionRecord[],
-      trades: TradeRecord[],
+      _trades: TradeRecord[],
       buckets: MonthBucket[],
       holdingsValue: number,
       netWorthCurrent: number,

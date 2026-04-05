@@ -35,6 +35,7 @@ import { formatAmount, formatDate, formatDateTime, formatMoney, formatPct, coerc
 import { nameInitials, normalizeName, normalizeSymbol, stripSeriesSuffix } from '../utils/symbols';
 import { computeCurrentCycleState } from '../utils/tradeCycles';
 import { getOverrideSymbol, setOverrideSymbol } from '../storage/mappingOverrides';
+import { mergeImportedTrades, type MergedTrade } from '../utils/mergedTrades';
 
 type TradeFilters = {
   query: string;
@@ -83,7 +84,7 @@ type ImportSymbolResolution = {
 };
 
 type TradeDisplay =
-  | { kind: 'single'; trade: TradeRecord }
+  | { kind: 'single'; trade: MergedTrade }
   | {
       kind: 'group';
       key: string;
@@ -94,6 +95,7 @@ type TradeDisplay =
       price: number;
       amount: number;
       trades: TradeRecord[];
+      merged: MergedTrade;
     };
 
 type TickerSummary = {
@@ -750,7 +752,7 @@ function dedupeImportRows(
   return { rows: next, duplicateCount };
 }
 
-function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
+function renderTableRows(trades: TradeRecord[], _linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
     return `
       <tr>
@@ -769,40 +771,54 @@ function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> 
       if (row.kind === 'single') {
         const trade = row.trade;
         const sideBadge = trade.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
-        const isLinkedLoss = linkedLossTradeIds.has(trade.id);
-        const recoveryButton =
-          trade.side === 'SELL'
-            ? isLinkedLoss
-              ? '<button class="btn btn-sm btn-outline-secondary me-2" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
-              : '<button class="btn btn-sm btn-outline-success me-2" data-action="recover">Recover</button>'
+        const fillBadge =
+          trade.importBased && trade.fillCount > 1
+            ? ` <span class="badge text-bg-light border">Fills ${trade.fillCount}</span>`
             : '';
         return `
-          <tr data-trade-id="${trade.id}">
+          <tr data-trade-id="${trade.trades[0].id}">
             <td>${formatDate(trade.tradeDate)}</td>
-            <td class="fw-semibold">${trade.symbol}</td>
+            <td class="fw-semibold">${trade.symbol}${fillBadge}</td>
             <td><span class="badge ${sideBadge}">${trade.side}</span></td>
             <td>${trade.quantity}</td>
             <td>${formatMoney(trade.price)}</td>
             <td>${formatAmount(trade.quantity, trade.price)}</td>
             <td class="text-end text-nowrap">
-              ${recoveryButton}
-              <button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button>
-              <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
+              ${
+                trade.trades.length === 1
+                  ? '<button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button><button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>'
+                  : `<button class="btn btn-sm btn-outline-secondary" data-action="toggle-group" data-group-key="${trade.id}">View Fills</button>`
+              }
             </td>
           </tr>
+          ${
+            trade.trades.length > 1
+              ? trade.trades
+                  .map(
+                    (fill) => `
+              <tr class="trade-group-child d-none" data-parent-group="${trade.id}" data-trade-id="${fill.id}">
+                <td>${formatDate(fill.tradeDate)}</td>
+                <td class="fw-semibold">${fill.symbol}</td>
+                <td><span class="badge ${sideBadge}">${fill.side}</span></td>
+                <td>${fill.quantity}</td>
+                <td>${formatMoney(fill.price)}</td>
+                <td>${formatAmount(fill.quantity, fill.price)}</td>
+                <td class="text-end text-nowrap">
+                  <button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button>
+                  <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
+                </td>
+              </tr>
+            `
+                  )
+                  .join('')
+              : ''
+          }
         `;
       }
       const sideBadge = row.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
       const fillCount = row.trades.length;
       const childRows = row.trades
         .map((trade) => {
-          const isLinkedLoss = linkedLossTradeIds.has(trade.id);
-          const recoveryButton =
-            trade.side === 'SELL'
-              ? isLinkedLoss
-                ? '<button class="btn btn-sm btn-outline-secondary me-2" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
-                : '<button class="btn btn-sm btn-outline-success me-2" data-action="recover">Recover</button>'
-              : '';
           return `
             <tr class="trade-group-child d-none" data-parent-group="${row.key}" data-trade-id="${trade.id}">
               <td>${formatDate(trade.tradeDate)}</td>
@@ -812,7 +828,6 @@ function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> 
               <td>${formatMoney(trade.price)}</td>
               <td>${formatAmount(trade.quantity, trade.price)}</td>
               <td class="text-end text-nowrap">
-                ${recoveryButton}
                 <button class="btn btn-sm btn-outline-primary me-2" data-action="edit">Edit</button>
                 <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
               </td>
@@ -838,7 +853,7 @@ function renderTableRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> 
     .join('');
 }
 
-function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> = new Set()): string {
+function renderCardRows(trades: TradeRecord[], _linkedLossTradeIds: Set<string> = new Set()): string {
   if (!trades.length) {
     return `
       <div class="text-center py-4">
@@ -855,35 +870,56 @@ function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> =
       if (row.kind === 'single') {
         const trade = row.trade;
         const sideBadge = trade.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
-        const isLinkedLoss = linkedLossTradeIds.has(trade.id);
-        const recoveryButton =
-          trade.side === 'SELL'
-            ? isLinkedLoss
-              ? '<button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
-              : '<button class="btn btn-sm btn-outline-success flex-grow-1" data-action="recover">Recover</button>'
+        const fillBadge =
+          trade.importBased && trade.fillCount > 1
+            ? ` <span class="badge text-bg-light border">Fills ${trade.fillCount}</span>`
             : '';
         return `
-          <div class="card trade-card shadow-sm border-0" data-trade-id="${trade.id}">
-            <div class="card-body d-flex flex-column gap-2">
-              <div class="d-flex justify-content-between">
-                <div>
-                  <div class="fw-semibold">${trade.symbol}</div>
-                  <div class="text-muted small">${formatDate(trade.tradeDate)}</div>
+          <div class="card trade-card shadow-sm border-0" data-trade-id="${trade.trades[0].id}">
+            <div class="card-body d-flex flex-column gap-3">
+              <div class="d-flex justify-content-between align-items-start gap-2">
+                <div class="trade-card-head">
+                  <div class="trade-card-symbol fw-semibold">${trade.symbol}${fillBadge}</div>
+                  <div class="text-muted small trade-card-date">${formatDate(trade.tradeDate)}</div>
                 </div>
                 <div class="text-end">
                   <span class="badge ${sideBadge}">${trade.side}</span>
                 </div>
               </div>
-              <div class="d-flex flex-wrap gap-3 small">
-                <div><span class="text-muted">Qty:</span> ${trade.quantity}</div>
-                <div><span class="text-muted">Entry:</span> ${formatMoney(trade.price)}</div>
-                <div><span class="text-muted">Amount:</span> ${formatAmount(trade.quantity, trade.price)}</div>
+              <div class="trade-card-metrics">
+                <div class="trade-card-metric"><span class="text-muted">Qty</span><strong>${trade.quantity}</strong></div>
+                <div class="trade-card-metric"><span class="text-muted">Entry</span><strong>${formatMoney(trade.price)}</strong></div>
+                <div class="trade-card-metric trade-card-metric-amount"><span class="text-muted">Amount</span><strong>${formatAmount(trade.quantity, trade.price)}</strong></div>
               </div>
-              <div class="d-flex gap-2">
-                ${recoveryButton}
-                <button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button>
-                <button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>
+              <div class="d-flex gap-2 trade-card-actions">
+                ${
+                  trade.trades.length === 1
+                    ? '<button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button><button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>'
+                    : `<button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="toggle-group" data-group-key="${trade.id}">View Fills</button>`
+                }
               </div>
+              ${
+                trade.trades.length > 1
+                  ? `<div class="trade-group-details d-flex flex-column gap-2">
+                      ${trade.trades
+                        .map(
+                          (fill) => `
+                        <div class="trade-group-child d-none" data-parent-group="${trade.id}" data-trade-id="${fill.id}">
+                          <div class="d-flex justify-content-between align-items-center small">
+                            <div class="text-muted">${formatDate(fill.tradeDate)}</div>
+                            <div>${fill.quantity} @ ${formatMoney(fill.price)}</div>
+                          </div>
+                          <div class="d-flex gap-2 mt-2">
+                            <button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button>
+                            <button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>
+                          </div>
+                        </div>
+                      `
+                        )
+                        .join('')}
+                    </div>`
+                  : ''
+              }
             </div>
           </div>
         `;
@@ -892,13 +928,6 @@ function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> =
       const fillCount = row.trades.length;
       const childItems = row.trades
         .map((trade) => {
-          const isLinkedLoss = linkedLossTradeIds.has(trade.id);
-          const recoveryButton =
-            trade.side === 'SELL'
-              ? isLinkedLoss
-                ? '<button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="recover" disabled title="Already linked to a recovery plan">In Plan</button>'
-                : '<button class="btn btn-sm btn-outline-success flex-grow-1" data-action="recover">Recover</button>'
-              : '';
           return `
             <div class="trade-group-child d-none" data-parent-group="${row.key}" data-trade-id="${trade.id}">
               <div class="d-flex justify-content-between align-items-center small">
@@ -906,7 +935,6 @@ function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> =
                 <div>${trade.quantity} @ ${formatMoney(trade.price)}</div>
               </div>
               <div class="d-flex gap-2 mt-2">
-                ${recoveryButton}
                 <button class="btn btn-sm btn-outline-primary flex-grow-1" data-action="edit">Edit</button>
                 <button class="btn btn-sm btn-outline-danger flex-grow-1" data-action="delete">Delete</button>
               </div>
@@ -916,22 +944,22 @@ function renderCardRows(trades: TradeRecord[], linkedLossTradeIds: Set<string> =
         .join('');
       return `
         <div class="card trade-card shadow-sm border-0" data-group-key="${row.key}">
-          <div class="card-body d-flex flex-column gap-2">
-            <div class="d-flex justify-content-between">
-              <div>
-                <div class="fw-semibold">${row.symbol} <span class="badge text-bg-light border">Fills ${fillCount}</span></div>
-                <div class="text-muted small">${formatDate(row.tradeDate)}</div>
+          <div class="card-body d-flex flex-column gap-3">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div class="trade-card-head">
+                <div class="trade-card-symbol fw-semibold">${row.symbol} <span class="badge text-bg-light border">Fills ${fillCount}</span></div>
+                <div class="text-muted small trade-card-date">${formatDate(row.tradeDate)}</div>
               </div>
               <div class="text-end">
                 <span class="badge ${sideBadge}">${row.side}</span>
               </div>
             </div>
-            <div class="d-flex flex-wrap gap-3 small">
-              <div><span class="text-muted">Qty:</span> ${row.quantity}</div>
-              <div><span class="text-muted">Entry:</span> ${formatMoney(row.price)}</div>
-              <div><span class="text-muted">Amount:</span> ${formatMoney(row.amount)}</div>
+            <div class="trade-card-metrics">
+              <div class="trade-card-metric"><span class="text-muted">Qty</span><strong>${row.quantity}</strong></div>
+              <div class="trade-card-metric"><span class="text-muted">Entry</span><strong>${formatMoney(row.price)}</strong></div>
+              <div class="trade-card-metric trade-card-metric-amount"><span class="text-muted">Amount</span><strong>${formatMoney(row.amount)}</strong></div>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 trade-card-actions">
               <button class="btn btn-sm btn-outline-secondary flex-grow-1" data-action="toggle-group" data-group-key="${row.key}">View Fills</button>
             </div>
             <div class="trade-group-details d-flex flex-column gap-2">
@@ -958,41 +986,22 @@ function applyFilters(trades: TradeRecord[], filters: TradeFilters): TradeRecord
 }
 
 function groupTradesForDisplay(trades: TradeRecord[]): TradeDisplay[] {
-  const map = new Map<string, TradeDisplay>();
-  const order: string[] = [];
-  trades.forEach((trade) => {
-    const symbol = normalizeSymbol(trade.symbol);
-    const price = Number(trade.price);
-    const key = `${trade.tradeDate}|${symbol}|${trade.side}|${Number.isFinite(price) ? price.toFixed(2) : ''}`;
-    const existing = map.get(key);
-    if (!existing) {
-      const entry: TradeDisplay = {
-        kind: 'group',
-        key,
-        symbol: trade.symbol,
-        side: trade.side,
-        tradeDate: trade.tradeDate,
-        quantity: 0,
-        price: 0,
-        amount: 0,
-        trades: []
-      };
-      map.set(key, entry);
-      order.push(key);
+  return mergeImportedTrades(trades).map((trade) => {
+    if (trade.trades.length === 1) {
+      return { kind: 'single', trade };
     }
-    const group = map.get(key) as Extract<TradeDisplay, { kind: 'group' }>;
-    group.trades.push(trade);
-    group.quantity += trade.quantity;
-    group.amount += trade.quantity * trade.price;
-    group.price = group.quantity > 0 ? group.amount / group.quantity : trade.price;
-  });
-
-  return order.map((key) => {
-    const group = map.get(key) as Extract<TradeDisplay, { kind: 'group' }>;
-    if (group.trades.length === 1) {
-      return { kind: 'single', trade: group.trades[0] };
-    }
-    return group;
+    return {
+      kind: 'group',
+      key: trade.id,
+      symbol: trade.symbol,
+      side: trade.side,
+      tradeDate: trade.tradeDate,
+      quantity: trade.quantity,
+      price: trade.price,
+      amount: trade.amount,
+      trades: trade.trades,
+      merged: trade
+    };
   });
 }
 
@@ -1004,7 +1013,7 @@ function buildTickerSummary(
   confidenceMap: ImportConfidenceMap
 ): TickerSummary[] {
   const map = new Map<string, TickerSummary>();
-  trades.forEach((trade) => {
+  mergeImportedTrades(trades).forEach((trade) => {
     const symbol = normalizeSymbol(trade.symbol);
     if (!symbol) return;
     const existing = map.get(symbol);
@@ -1078,13 +1087,13 @@ export function renderTradesView(root: HTMLElement): void {
     const deepSymbol = normalizeSymbol(urlParams.get('symbol') || '');
     const deepFrom = urlParams.get('from') || '';
     const deepTo = urlParams.get('to') || '';
-    const initialTab = window.location.hash.replace('#', '') || (deepSymbol ? 'history' : 'history');
+    const requestedTab = window.location.hash.replace('#', '');
+    const initialTab =
+      requestedTab === 'recovery' || requestedTab === 'reentry' ? 'history' : requestedTab || (deepSymbol ? 'history' : 'history');
     const quickNav = [
       { id: 'list', label: 'Ticker List', href: 'trades.html#list', icon: 'list' },
       { id: 'request', label: 'Ticker Request', href: 'trades.html#request', icon: 'send' },
-      { id: 'history', label: 'Trade History', href: 'trades.html#history', icon: 'history' },
-      { id: 'recovery', label: 'Recovery Plans', href: 'trades.html#recovery', icon: 'rotate-cw' },
-      { id: 'reentry', label: 'Intraday Analysis', href: 'trades.html#reentry', icon: 'repeat' }
+      { id: 'history', label: 'Trade History', href: 'trades.html#history', icon: 'history' }
     ];
 
     root.innerHTML = renderShell({
@@ -1095,29 +1104,36 @@ export function renderTradesView(root: HTMLElement): void {
       quickNav,
       quickNavActive: initialTab,
       content: `
-        <div id="trade-feedback" class="alert d-none" role="alert"></div>
+        <div class="trades-page">
+          <div id="trade-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
-          <div>
-            <h1 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('repeat')}</span>
-              Trades
-            </h1>
-            <div class="text-muted small">Track positions, outcomes, and quick performance stats.</div>
+          <div class="card shadow-sm border-0 trades-hero mb-3">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                <div>
+                  <div class="trades-eyebrow">Trading journal</div>
+                  <h1 class="h5 mb-1 section-title">
+                    <span class="section-icon">${lucideIcon('repeat')}</span>
+                    Trades
+                  </h1>
+                  <div class="text-muted small">Track buys, sells, grouped fills, and recent activity in one place.</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 trades-hero-actions">
+                  <a class="btn btn-outline-secondary" href="exit-strategy.html">${lucideIcon('crosshair')} Exit Strategy</a>
+                  <button class="btn btn-primary" id="trade-add">${lucideIcon('plus')} Add Trade</button>
+                  <label class="btn btn-outline-secondary mb-0" id="trade-import-label">
+                    ${lucideIcon('upload')} Import File
+                    <input type="file" id="trade-import" accept=".csv,.xlsx,.xls" hidden />
+                  </label>
+                </div>
+              </div>
+              <div id="trade-import-report" class="alert alert-warning d-none mt-3 mb-0" role="alert"></div>
+            </div>
           </div>
-          <div class="d-flex flex-wrap gap-2">
-            <button class="btn btn-primary" id="trade-add">${lucideIcon('plus')} Add Trade</button>
-            <label class="btn btn-outline-secondary mb-0" id="trade-import-label">
-              ${lucideIcon('upload')} Import File
-              <input type="file" id="trade-import" accept=".csv,.xlsx,.xls" hidden />
-            </label>
-          </div>
-          <div id="trade-import-report" class="alert alert-warning d-none mt-2" role="alert"></div>
-        </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3 mb-3 trades-kpi-row">
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 trades-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon indigo">${lucideIcon('layers')}</span>
@@ -1128,7 +1144,7 @@ export function renderTradesView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 trades-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('arrow-up-right')}</span>
@@ -1139,7 +1155,7 @@ export function renderTradesView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 trades-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon rose">${lucideIcon('arrow-down-right')}</span>
@@ -1151,7 +1167,7 @@ export function renderTradesView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 trades-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon amber">${lucideIcon('calculator')}</span>
@@ -1164,10 +1180,11 @@ export function renderTradesView(root: HTMLElement): void {
         </div>
 
         <section class="trade-tab" data-trade-panel="list">
-          <div class="card shadow-sm border-0 mb-3">
+          <div class="card shadow-sm border-0 mb-3 trades-section-card">
             <div class="card-body">
               <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 ticker-header">
                 <div>
+                  <div class="trades-eyebrow">Symbols</div>
                   <h2 class="h6 mb-1 section-title">
                     <span class="section-icon">${lucideIcon('list')}</span>
                     Ticker List
@@ -1220,8 +1237,9 @@ export function renderTradesView(root: HTMLElement): void {
         <section class="trade-tab d-none" data-trade-panel="request">
           <div class="row g-3 mb-3">
             <div class="col-lg-4">
-              <div class="card shadow-sm border-0">
+              <div class="card shadow-sm border-0 trades-section-card">
                 <div class="card-body">
+                  <div class="trades-eyebrow">Requests</div>
                   <h2 class="h6 mb-3 section-title">
                     <span class="section-icon">${lucideIcon('send')}</span>
                     Request New Ticker
@@ -1239,13 +1257,16 @@ export function renderTradesView(root: HTMLElement): void {
               </div>
             </div>
             <div class="col-lg-8">
-              <div class="card shadow-sm border-0">
+              <div class="card shadow-sm border-0 trades-section-card">
                 <div class="card-body">
                   <div class="d-flex justify-content-between align-items-center mb-3 request-header">
-                    <h2 class="h6 mb-0 section-title">
-                      <span class="section-icon">${lucideIcon('clipboard-list')}</span>
-                      My Ticker Requests
-                    </h2>
+                    <div>
+                      <div class="trades-eyebrow">Requests</div>
+                      <h2 class="h6 mb-0 section-title">
+                        <span class="section-icon">${lucideIcon('clipboard-list')}</span>
+                        My Ticker Requests
+                      </h2>
+                    </div>
                     <div class="text-muted small" id="request-count">--</div>
                   </div>
                   <div class="table-responsive">
@@ -1269,9 +1290,9 @@ export function renderTradesView(root: HTMLElement): void {
         </section>
 
         <section class="trade-tab d-none" data-trade-panel="history">
-          <div class="card shadow-sm border-0 mb-3">
+          <div class="card shadow-sm border-0 mb-3 trades-section-card">
             <div class="card-body">
-              <div class="row g-2 align-items-end mb-3 trade-filter-bar">
+              <div class="row g-2 align-items-end mb-3 trade-filter-bar trades-filter-bar">
                 <div class="col-12 col-md-4">
                   <label class="form-label small text-muted">Search</label>
                   <div class="input-group input-group-sm">
@@ -1298,6 +1319,11 @@ export function renderTradesView(root: HTMLElement): void {
                   <button class="btn btn-outline-secondary btn-sm" id="filter-clear">Clear</button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="card shadow-sm border-0 mb-3 trades-section-card trades-history-card">
+            <div class="card-body">
               <div class="d-flex justify-content-between align-items-center mb-2 recovery-trend-header">
                 <h2 class="h6 mb-0 section-title">
                   <span class="section-icon">${lucideIcon('history')}</span>
@@ -1306,7 +1332,7 @@ export function renderTradesView(root: HTMLElement): void {
                 <div class="text-muted small" id="trade-count">--</div>
               </div>
               <div class="table-responsive d-none d-md-block">
-                <table class="table table-sm align-middle trade-table mb-0">
+                <table class="table table-sm align-middle trade-table trade-table-soft mb-0 trades-history-table">
                   <thead>
                     <tr>
                       <th>Date</th>
@@ -1321,7 +1347,7 @@ export function renderTradesView(root: HTMLElement): void {
                   <tbody id="trade-table-body"></tbody>
                 </table>
               </div>
-              <div class="d-md-none d-flex flex-column gap-2" id="trade-card-list"></div>
+              <div class="d-md-none d-flex flex-column gap-2 trade-card-list" id="trade-card-list"></div>
             </div>
           </div>
         </section>
@@ -1561,6 +1587,8 @@ export function renderTradesView(root: HTMLElement): void {
             </div>
           </div>
         </section>
+
+        </div>
 
         <div class="app-modal" id="trade-modal" aria-hidden="true">
           <div class="app-modal-backdrop" data-close="modal"></div>
@@ -2100,7 +2128,10 @@ export function renderTradesView(root: HTMLElement): void {
 
     const updateQuickNavActive = (name: string) => {
       root.querySelectorAll<HTMLElement>('[data-quick-id]').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.quickId === name);
+        const quickId = btn.dataset.quickId || '';
+        const isMobilePrimary = btn.classList.contains('mobile-primary-nav-item');
+        const mobileActive = ['list', 'request', 'history'].includes(name) ? 'trades' : name;
+        btn.classList.toggle('active', isMobilePrimary ? quickId === mobileActive : quickId === name);
       });
     };
 
@@ -2966,10 +2997,11 @@ export function renderTradesView(root: HTMLElement): void {
     };
 
     const refreshKpis = () => {
-      const total = trades.length;
-      const buys = trades.filter((trade) => trade.side === 'BUY').length;
-      const sells = trades.filter((trade) => trade.side === 'SELL').length;
-      const amounts = trades
+      const mergedTrades = mergeImportedTrades(trades);
+      const total = mergedTrades.length;
+      const buys = mergedTrades.filter((trade) => trade.side === 'BUY').length;
+      const sells = mergedTrades.filter((trade) => trade.side === 'SELL').length;
+      const amounts = mergedTrades
         .map((trade) => Number(trade.quantity) * Number(trade.price))
         .filter((value) => Number.isFinite(value));
       const avgAmount = amounts.length ? amounts.reduce((sum, value) => sum + value, 0) / amounts.length : null;
@@ -4581,9 +4613,11 @@ export function renderTradesView(root: HTMLElement): void {
 
     const refreshList = () => {
       const filtered = applyFilters(trades, filters);
+      const mergedFiltered = mergeImportedTrades(filtered);
+      const mergedAll = mergeImportedTrades(trades);
       tradeTableBody.innerHTML = renderTableRows(filtered, linkedLossTradeIds);
       tradeCardList.innerHTML = renderCardRows(filtered, linkedLossTradeIds);
-      tradeCount.textContent = `${filtered.length} of ${trades.length} trades`;
+      tradeCount.textContent = `${mergedFiltered.length} of ${mergedAll.length} trades`;
     };
 
     const refreshTickerPanels = async () => {
@@ -5331,6 +5365,10 @@ export function renderTradesView(root: HTMLElement): void {
 
     const handleHash = () => {
       const hash = window.location.hash.replace('#', '') || 'history';
+      if (hash === 'recovery' || hash === 'reentry') {
+        window.location.href = 'exit-strategy.html';
+        return;
+      }
       if (hash === 'add-trade') {
         setTab('history');
         updateQuickNavActive('history');

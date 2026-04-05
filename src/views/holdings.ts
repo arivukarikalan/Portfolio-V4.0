@@ -75,163 +75,173 @@ export function renderHoldingsView(root: HTMLElement): void {
       title: 'Holdings',
       subtitle: 'Track open positions and current exposure.',
       content: `
-        <div id="holdings-feedback" class="alert d-none" role="alert"></div>
+        <div class="holdings-page">
+          <div id="holdings-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
-          <div>
-            <h1 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('pie-chart')}</span>
-              Holdings
-            </h1>
-            <div class="text-muted small">Monitor invested value, P/L, and allocation by ticker.</div>
+          <div class="card shadow-sm border-0 holdings-hero">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                <div>
+                  <div class="holdings-eyebrow">Portfolio view</div>
+                  <h1 class="h5 mb-1 section-title">
+                    <span class="section-icon">${lucideIcon('pie-chart')}</span>
+                    Holdings
+                  </h1>
+                  <div class="text-muted small">Track open positions, allocation, and unrealized performance in one place.</div>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <button class="btn btn-outline-secondary holdings-refresh-btn" id="holdings-refresh">
+                    ${lucideIcon('refresh-ccw')} Refresh Prices
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="d-flex align-items-center gap-2">
-            <button class="btn btn-outline-secondary" id="holdings-refresh">
-              ${lucideIcon('refresh-ccw')} Refresh Prices
-            </button>
-          </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon amber">${lucideIcon('wallet')}</span>
-                  Invested
+          <div class="row g-3 holdings-kpi-row">
+            <div class="col-6 col-lg-3">
+              <div class="card shadow-sm border-0 h-100 holdings-kpi-card">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon amber">${lucideIcon('wallet')}</span>
+                    Invested
+                  </div>
+                  <div class="h5 mb-0" id="kpi-invested">--</div>
                 </div>
-                <div class="h5 mb-0" id="kpi-invested">--</div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card shadow-sm border-0 h-100 holdings-kpi-card">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon teal">${lucideIcon('line-chart')}</span>
+                    Current Value
+                  </div>
+                  <div class="h5 mb-0" id="kpi-value">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card shadow-sm border-0 h-100 holdings-kpi-card">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon rose">${lucideIcon('activity')}</span>
+                    Unrealized P/L
+                  </div>
+                  <div class="h5 mb-0" id="kpi-pnl">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card shadow-sm border-0 h-100 holdings-kpi-card">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon indigo">${lucideIcon('percent')}</span>
+                    P/L %
+                  </div>
+                  <div class="h5 mb-0" id="kpi-pnl-pct">--</div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon teal">${lucideIcon('line-chart')}</span>
-                  Current Value
-                </div>
-                <div class="h5 mb-0" id="kpi-value">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon rose">${lucideIcon('activity')}</span>
-                  Unrealized P/L
-                </div>
-                <div class="h5 mb-0" id="kpi-pnl">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon indigo">${lucideIcon('percent')}</span>
-                  P/L %
-                </div>
-                <div class="h5 mb-0" id="kpi-pnl-pct">--</div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                  <div>
-                    <h2 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('pie-chart')}</span>
-                      Allocation
-                    </h2>
-                    <div class="text-muted small">Top holdings by value.</div>
+          <div class="row g-3 holdings-visual-row">
+            <div class="col-lg-6">
+              <div class="card shadow-sm border-0 h-100 holdings-chart-card">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                      <h2 class="h6 mb-1 section-title">
+                        <span class="section-icon">${lucideIcon('pie-chart')}</span>
+                        Allocation
+                      </h2>
+                      <div class="text-muted small">Largest positions by current value.</div>
+                    </div>
+                  </div>
+                  <div class="chart-wrap">
+                    <canvas id="holdings-pie" height="260"></canvas>
+                    <div class="chart-empty text-muted small d-none" id="holdings-pie-empty">No holdings yet.</div>
+                  </div>
+                  <div class="chart-legend" id="holdings-legend"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-6">
+              <div class="card shadow-sm border-0 h-100 holdings-chart-card">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                      <h2 class="h6 mb-1 section-title">
+                        <span class="section-icon">${lucideIcon('timer')}</span>
+                        Longest Holds
+                      </h2>
+                      <div class="text-muted small">Top 5 positions by holding days.</div>
+                    </div>
+                  </div>
+                  <div class="chart-wrap">
+                    <canvas id="holdings-bar" height="160"></canvas>
+                    <div class="chart-empty text-muted small d-none" id="holdings-bar-empty">No holdings yet.</div>
                   </div>
                 </div>
-                <div class="chart-wrap">
-                  <canvas id="holdings-pie" height="260"></canvas>
-                  <div class="chart-empty text-muted small d-none" id="holdings-pie-empty">No holdings yet.</div>
-                </div>
-                <div class="chart-legend" id="holdings-legend"></div>
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                  <div>
-                    <h2 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('timer')}</span>
-                      Longest Holds
-                    </h2>
-                    <div class="text-muted small">Top 5 by holding days.</div>
+
+          <div class="card shadow-sm border-0 holdings-list-card">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 holdings-header">
+                <div>
+                  <div class="holdings-eyebrow">Open positions</div>
+                  <h2 class="h6 mb-1 section-title">
+                    <span class="section-icon">${lucideIcon('list')}</span>
+                    Holdings List
+                  </h2>
+                  <div class="text-muted small" id="holdings-last-refresh">Last refresh: --</div>
+                </div>
+                <div class="d-flex align-items-center gap-2 holdings-actions">
+                  <div class="text-muted small" id="holdings-count">--</div>
+                </div>
+              </div>
+
+              <div class="holdings-toolbar mb-3">
+                <div class="row g-2 align-items-end">
+                  <div class="col-12 col-md-5">
+                    <label class="form-label small text-muted">Search</label>
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text bg-white">${lucideIcon('search')}</span>
+                      <input class="form-control" id="holdings-search" placeholder="Search ticker" />
+                    </div>
+                  </div>
+                  <div class="col-12 col-md-7">
+                    <label class="form-label small text-muted">Quick Filters</label>
+                    <div class="btn-group btn-group-sm w-100 flex-wrap" role="group">
+                      <button class="btn btn-outline-secondary active" data-filter="all" type="button">All</button>
+                      <button class="btn btn-outline-secondary" data-filter="profit" type="button">Profit</button>
+                      <button class="btn btn-outline-secondary" data-filter="loss" type="button">Loss</button>
+                      <button class="btn btn-outline-secondary" data-filter="allocation" type="button">High Allocation</button>
+                    </div>
                   </div>
                 </div>
-                <div class="chart-wrap">
-                  <canvas id="holdings-bar" height="160"></canvas>
-                  <div class="chart-empty text-muted small d-none" id="holdings-bar-empty">No holdings yet.</div>
-                </div>
               </div>
-            </div>
-          </div>
-        </div>
 
-        <div class="card shadow-sm border-0">
-          <div class="card-body">
-            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 holdings-header">
-              <div>
-                <h2 class="h6 mb-1 section-title">
-                  <span class="section-icon">${lucideIcon('list')}</span>
-                  Holdings List
-                </h2>
-                <div class="text-muted small" id="holdings-last-refresh">Last refresh: --</div>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle trade-table trade-table-soft table-striped table-hover mb-0 mobile-stack mobile-toggle-details holdings-table">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th>Hold Days</th>
+                      <th>Qty</th>
+                      <th>Avg Buy</th>
+                      <th class="text-end">LTP</th>
+                      <th class="text-end">Current Value</th>
+                      <th class="text-end">P/L</th>
+                      <th class="text-end">P/L %</th>
+                      <th class="text-end">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="holdings-body"></tbody>
+                </table>
               </div>
-              <div class="d-flex align-items-center gap-2 holdings-actions">
-                <div class="text-muted small" id="holdings-count">--</div>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-end mb-3">
-              <div class="col-12 col-md-5">
-                <label class="form-label small text-muted">Search</label>
-                <div class="input-group input-group-sm">
-                  <span class="input-group-text bg-white">${lucideIcon('search')}</span>
-                  <input class="form-control" id="holdings-search" placeholder="Search ticker" />
-                </div>
-              </div>
-              <div class="col-12 col-md-7">
-                <label class="form-label small text-muted">Quick Filters</label>
-                <div class="btn-group btn-group-sm w-100 flex-wrap" role="group">
-                  <button class="btn btn-outline-secondary active" data-filter="all" type="button">All</button>
-                  <button class="btn btn-outline-secondary" data-filter="profit" type="button">Profit</button>
-                  <button class="btn btn-outline-secondary" data-filter="loss" type="button">Loss</button>
-                  <button class="btn btn-outline-secondary" data-filter="allocation" type="button">High Allocation</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="table-responsive">
-              <table class="table table-sm align-middle trade-table trade-table-soft table-striped table-hover mb-0 mobile-stack mobile-toggle-details holdings-table">
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Hold Days</th>
-                    <th>Qty</th>
-                    <th>Avg Buy</th>
-                    <th class="text-end">LTP</th>
-                    <th class="text-end">Current Value</th>
-                    <th class="text-end">P/L</th>
-                    <th class="text-end">P/L %</th>
-                    <th class="text-end">Action</th>
-                  </tr>
-                </thead>
-                <tbody id="holdings-body"></tbody>
-              </table>
             </div>
           </div>
         </div>

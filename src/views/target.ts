@@ -63,24 +63,25 @@ export function renderTargetView(root: HTMLElement): void {
       title: 'Target Planner',
       subtitle: 'Plan exit targets and track sell readiness.',
       content: `
-        <div id="target-feedback" class="alert d-none" role="alert"></div>
+        <div class="target-page">
+          <div id="target-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <h2 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('target')}</span>
-              Target Planner
-            </h2>
-            <div class="text-muted small">Exit at your minimum profit target with clear progress tracking.</div>
+          <div class="card target-hero shadow-sm border-0">
+            <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div>
+                <div class="target-eyebrow">Exit Planning</div>
+                <h2 class="h5 mb-1 section-title">Target Planner</h2>
+                <div class="text-muted small">Track sell readiness, target prices, and expected profit in one place.</div>
+              </div>
+              <button class="btn btn-outline-secondary btn-sm" id="target-sync">
+                ${lucideIcon('refresh-ccw')} Sync
+              </button>
+            </div>
           </div>
-          <button class="btn btn-outline-secondary btn-sm" id="target-sync">
-            ${lucideIcon('refresh-ccw')} Sync
-          </button>
-        </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-6 col-lg-3">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon amber">${lucideIcon('percent')}</span>
@@ -91,7 +92,7 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('layers')}</span>
@@ -102,7 +103,7 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon indigo">${lucideIcon('check-circle')}</span>
@@ -113,7 +114,7 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon rose">${lucideIcon('activity')}</span>
@@ -123,11 +124,11 @@ export function renderTargetView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-12 col-lg-4">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon amber">${lucideIcon('wallet')}</span>
@@ -138,7 +139,7 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-12 col-lg-4">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('line-chart')}</span>
@@ -149,7 +150,7 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-12 col-lg-4">
-            <div class="card target-kpi shadow-sm border-0 h-100">
+            <div class="card target-kpi target-kpi-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon indigo">${lucideIcon('sparkles')}</span>
@@ -160,18 +161,16 @@ export function renderTargetView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3 mb-3">
+          <div class="row g-3">
           <div class="col-12">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card target-section-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                   <div>
-                    <h3 class="h6 mb-0 section-title">
-                      <span class="section-icon">${lucideIcon('list-check')}</span>
-                      Active Targets
-                    </h3>
+                    <div class="target-eyebrow">Tracking</div>
+                    <h3 class="h6 mb-0 section-title">Active Targets</h3>
                     <div class="text-muted small" id="target-active-count">--</div>
                   </div>
                   <div class="text-muted small" id="target-sort-note">Sort by name, change, or progress.</div>
@@ -210,17 +209,17 @@ export function renderTargetView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3">
+          <div class="row g-3">
           <div class="col-12 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card target-section-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('check-circle')}</span>
-                    Ready to Exit
-                  </h3>
+                  <div>
+                    <div class="target-eyebrow">Signals</div>
+                    <h3 class="h6 mb-0 section-title">Ready to Exit</h3>
+                  </div>
                   <span class="text-muted small" id="target-ready-badge">--</span>
                 </div>
                 <div id="target-ready-list" class="target-list"></div>
@@ -229,53 +228,47 @@ export function renderTargetView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-12 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card target-section-card shadow-sm border-0 h-100">
               <div class="card-body">
-                <h3 class="h6 mb-3 section-title">
-                  <span class="section-icon">${lucideIcon('badge-check')}</span>
-                  Completed
-                </h3>
+                <div class="target-eyebrow">History</div>
+                <h3 class="h6 mb-3 section-title">Completed</h3>
                 <div id="target-completed" class="target-list"></div>
                 <div id="target-completed-pagination" class="mt-2"></div>
               </div>
             </div>
           </div>
           <div class="col-12 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card target-section-card shadow-sm border-0 h-100">
               <div class="card-body">
-                <h3 class="h6 mb-3 section-title">
-                  <span class="section-icon">${lucideIcon('alert-triangle')}</span>
-                  Early Exit
-                </h3>
+                <div class="target-eyebrow">History</div>
+                <h3 class="h6 mb-3 section-title">Early Exit</h3>
                 <div id="target-early" class="target-list"></div>
                 <div id="target-early-pagination" class="mt-2"></div>
               </div>
             </div>
           </div>
           <div class="col-12 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card target-section-card shadow-sm border-0 h-100">
               <div class="card-body">
-                <h3 class="h6 mb-3 section-title">
-                  <span class="section-icon">${lucideIcon('x-circle')}</span>
-                  Loss
-                </h3>
+                <div class="target-eyebrow">History</div>
+                <h3 class="h6 mb-3 section-title">Loss</h3>
                 <div id="target-loss" class="target-list"></div>
                 <div id="target-loss-pagination" class="mt-2"></div>
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="app-modal" id="target-breakdown-modal" aria-hidden="true">
+          <div class="app-modal" id="target-breakdown-modal" aria-hidden="true">
           <div class="app-modal-backdrop" data-close="modal"></div>
           <div class="app-modal-dialog">
             <div class="card shadow-lg border-0">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('layers')}</span>
-                    Target Breakdown
-                  </h3>
+                  <div>
+                    <div class="target-eyebrow">Details</div>
+                    <h3 class="h6 mb-0 section-title">Target Breakdown</h3>
+                  </div>
                   <button class="btn btn-sm btn-outline-secondary" type="button" data-close="modal">Close</button>
                 </div>
                 <div class="text-muted small mb-3" id="breakdown-subtitle">--</div>
@@ -297,6 +290,7 @@ export function renderTargetView(root: HTMLElement): void {
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </div>
       `

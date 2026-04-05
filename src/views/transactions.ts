@@ -163,22 +163,27 @@ export function renderTransactionsView(root: HTMLElement): void {
         <div class="transactions-page">
         <div id="transactions-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <h2 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('arrow-right-left')}</span>
-              Transactions
-            </h2>
-            <div class="text-muted small">Capture cash flow, debts, and assets with recurring rules.</div>
+        <div class="card shadow-sm border-0 txn-hero mb-3">
+          <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <div>
+                <div class="txn-eyebrow">Cash flow manager</div>
+                <h2 class="h5 mb-1 section-title">
+                  <span class="section-icon">${lucideIcon('arrow-right-left')}</span>
+                  Transactions
+                </h2>
+                <div class="text-muted small">Capture cash flow, debts, assets, and recurring rules in one place.</div>
+              </div>
+              <button class="btn btn-outline-secondary btn-sm" id="transactions-sync">
+                ${lucideIcon('refresh-ccw')} Sync
+              </button>
+            </div>
           </div>
-          <button class="btn btn-outline-secondary btn-sm" id="transactions-sync">
-            ${lucideIcon('refresh-ccw')} Sync
-          </button>
         </div>
 
         <div class="row g-3 mb-3">
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 txn-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon teal">${lucideIcon('repeat')}</span>
@@ -189,7 +194,7 @@ export function renderTransactionsView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 txn-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon rose">${lucideIcon('repeat-1')}</span>
@@ -200,7 +205,7 @@ export function renderTransactionsView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 txn-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon amber">${lucideIcon('hand-coins')}</span>
@@ -211,7 +216,7 @@ export function renderTransactionsView(root: HTMLElement): void {
             </div>
           </div>
           <div class="col-6 col-lg-3">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="card shadow-sm border-0 h-100 txn-kpi-card">
               <div class="card-body">
                 <div class="text-muted small kpi-label">
                   <span class="label-icon indigo">${lucideIcon('wallet')}</span>
@@ -226,8 +231,9 @@ export function renderTransactionsView(root: HTMLElement): void {
         <div id="txn-section-history">
             <div class="row g-3">
               <div class="col-lg-4">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 txn-section-card">
               <div class="card-body">
+                <div class="txn-eyebrow">Entry</div>
                 <h3 class="h6 mb-3 section-title">
                   <span class="section-icon">${lucideIcon('file-plus')}</span>
                   Add Transaction
@@ -277,10 +283,11 @@ export function renderTransactionsView(root: HTMLElement): void {
           </div>
 
               <div class="col-lg-8">
-                <div class="card shadow-sm border-0 h-100">
+                <div class="card shadow-sm border-0 h-100 txn-section-card">
               <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 txn-filter-bar">
                   <div>
+                    <div class="txn-eyebrow">History</div>
                     <h3 class="h6 mb-1 section-title">
                       <span class="section-icon">${lucideIcon('list')}</span>
                       Transaction History
@@ -329,8 +336,9 @@ export function renderTransactionsView(root: HTMLElement): void {
         <div id="txn-section-recurring" class="d-none">
           <div class="row g-3">
             <div class="col-lg-4">
-              <div class="card shadow-sm border-0 h-100">
+              <div class="card shadow-sm border-0 h-100 txn-section-card">
                 <div class="card-body">
+                  <div class="txn-eyebrow">Automation</div>
                   <h3 class="h6 mb-3 section-title">
                     <span class="section-icon">${lucideIcon('repeat')}</span>
                     Recurring Setup
@@ -384,10 +392,11 @@ export function renderTransactionsView(root: HTMLElement): void {
               </div>
             </div>
             <div class="col-lg-8">
-              <div class="card shadow-sm border-0 h-100">
+              <div class="card shadow-sm border-0 h-100 txn-section-card">
                 <div class="card-body">
                   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                     <div>
+                      <div class="txn-eyebrow">Automation</div>
                       <h3 class="h6 mb-1 section-title">
                         <span class="section-icon">${lucideIcon('calendar-clock')}</span>
                         Recurring List
@@ -419,8 +428,9 @@ export function renderTransactionsView(root: HTMLElement): void {
         <div id="txn-section-goals" class="d-none">
           <div class="row g-3">
             <div class="col-lg-4">
-              <div class="card shadow-sm border-0 h-100">
+              <div class="card shadow-sm border-0 h-100 txn-section-card">
                 <div class="card-body">
+                  <div class="txn-eyebrow">Planning</div>
                   <h3 class="h6 mb-3 section-title">
                     <span class="section-icon">${lucideIcon('flag')}</span>
                     Goal Builder
@@ -460,10 +470,11 @@ export function renderTransactionsView(root: HTMLElement): void {
               </div>
             </div>
             <div class="col-lg-8">
-              <div class="card shadow-sm border-0 h-100">
+              <div class="card shadow-sm border-0 h-100 txn-section-card">
                 <div class="card-body">
                   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                     <div>
+                      <div class="txn-eyebrow">Planning</div>
                       <h3 class="h6 mb-1 section-title">
                         <span class="section-icon">${lucideIcon('clipboard-list')}</span>
                         Goals & Plans
@@ -494,6 +505,7 @@ export function renderTransactionsView(root: HTMLElement): void {
             <div class="col-lg-4">
               <div class="card shadow-sm border-0 goal-summary h-100">
                 <div class="card-body">
+                  <div class="txn-eyebrow">Planning</div>
                   <h3 class="h6 mb-3 section-title">
                     <span class="section-icon">${lucideIcon('sparkles')}</span>
                     Goal Summary
@@ -511,7 +523,7 @@ export function renderTransactionsView(root: HTMLElement): void {
               </div>
             </div>
             <div class="col-lg-8">
-              <div class="card shadow-sm border-0 h-100">
+              <div class="card shadow-sm border-0 h-100 txn-section-card">
                 <div class="card-body">
                   <div class="row g-3">
                     <div class="col-lg-7">

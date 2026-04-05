@@ -2,6 +2,9 @@ import * as XLSX from 'xlsx';
 import { renderShell, bindShell } from '../ui/shell';
 import { clearAlert, setBusy, showAlert, flashInline } from '../ui/feedback';
 import type {
+  ExitStrategyEntryLeg,
+  ExitStrategyScenario,
+  ExitStrategySourceLeg,
   GoalPlan,
   RecurrenceFrequency,
   RecoveryLeg,
@@ -19,6 +22,7 @@ import { listTransactions, replaceTransactionsForUser } from '../storage/transac
 import { listGoals, replaceGoalsForUser } from '../storage/goals';
 import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recoveryPlans';
 import { listReentryPlans, replaceReentryPlansForUser } from '../storage/reentryPlans';
+import { listExitStrategies, replaceExitStrategiesForUser } from '../storage/exitStrategies';
 import { deleteUserSettings, getUserSettings, saveUserSettings } from '../storage/settings';
 import { queueSnapshot } from '../services/cloudSync';
 import { requireSession } from './guards';
@@ -182,7 +186,7 @@ export function renderSettingsView(root: HTMLElement): void {
                 </div>
                 <div class="text-muted small mt-2">
                   Sheets: Trades, Transactions, Recurring, Goals, RecoveryPlans, RecoveryLegs, RecoveryLossLegs,
-                  ReentryPlans, ReentryLegs, Settings
+                  ReentryPlans, ReentryLegs, ExitStrategies, ExitStrategySourceLegs, ExitStrategyEntryLegs, Settings
                 </div>
               </div>
             </div>
@@ -464,6 +468,12 @@ export function renderSettingsView(root: HTMLElement): void {
       reentryPlansPresent: boolean;
       reentryLegs: Array<ReentryBuyLeg & { planId: string }>;
       reentryLegsPresent: boolean;
+      exitStrategies: ExitStrategyScenario[];
+      exitStrategiesPresent: boolean;
+      exitStrategySourceLegs: Array<ExitStrategySourceLeg & { scenarioId: string }>;
+      exitStrategySourceLegsPresent: boolean;
+      exitStrategyEntryLegs: Array<ExitStrategyEntryLeg & { scenarioId: string }>;
+      exitStrategyEntryLegsPresent: boolean;
       settings: Partial<UserSettings> | null;
       settingsPresent: boolean;
     };
@@ -669,6 +679,72 @@ export function renderSettingsView(root: HTMLElement): void {
         })
         .filter((row) => row.planId && row.symbol);
 
+    const parseExitStrategyRows = (rows: Record<string, unknown>[]): ExitStrategyScenario[] =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          const modeRaw = readString(row.mode).toUpperCase();
+          const mode =
+            modeRaw === 'SWAP' || modeRaw === 'INTRADAY' || modeRaw === 'REENTRY' ? modeRaw : 'REENTRY';
+          const status = readString(row.status) === 'CLOSED' ? 'CLOSED' : 'ACTIVE';
+          return {
+            id,
+            userId: session.userId,
+            mode: mode as ExitStrategyScenario['mode'],
+            status: status as ExitStrategyScenario['status'],
+            name: readString(row.name) || undefined,
+            sourceLegs: [],
+            entryLegs: [],
+            notes: readString(row.notes) || undefined,
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt),
+            closedAt: readString(row.closedAt) || null
+          } as ExitStrategyScenario;
+        })
+        .filter((row) => row.mode);
+
+    const parseExitStrategySourceRows = (
+      rows: Record<string, unknown>[]
+    ): Array<ExitStrategySourceLeg & { scenarioId: string }> =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          return {
+            id,
+            scenarioId: readString(row.scenarioId),
+            tradeId: readString(row.tradeId) || undefined,
+            symbol: readString(row.symbol),
+            quantity: readNumber(row.quantity),
+            sellPrice: readNumber(row.sellPrice),
+            avgCost: readNumber(row.avgCost),
+            realizedLoss: readNumber(row.realizedLoss),
+            tradeDate: normalizeDate(row.tradeDate),
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt)
+          } as ExitStrategySourceLeg & { scenarioId: string };
+        })
+        .filter((row) => row.scenarioId && row.symbol);
+
+    const parseExitStrategyEntryRows = (
+      rows: Record<string, unknown>[]
+    ): Array<ExitStrategyEntryLeg & { scenarioId: string }> =>
+      rows
+        .map((row) => {
+          const id = readString(row.id) || crypto.randomUUID();
+          return {
+            id,
+            scenarioId: readString(row.scenarioId),
+            tradeId: readString(row.tradeId) || undefined,
+            symbol: readString(row.symbol),
+            quantity: readNumber(row.quantity),
+            buyPrice: readNumber(row.buyPrice),
+            tradeDate: normalizeDate(row.tradeDate),
+            createdAt: normalizeTimestamp(row.createdAt),
+            updatedAt: normalizeTimestamp(row.updatedAt)
+          } as ExitStrategyEntryLeg & { scenarioId: string };
+        })
+        .filter((row) => row.scenarioId && row.symbol);
+
     const parseSettingsRow = (rows: Record<string, unknown>[]): Partial<UserSettings> | null => {
       if (!rows.length) return null;
       const row = rows[0] || {};
@@ -713,6 +789,9 @@ export function renderSettingsView(root: HTMLElement): void {
       const recoveryLossSheet = workbook.Sheets['RecoveryLossLegs'];
       const reentryPlansSheet = workbook.Sheets['ReentryPlans'];
       const reentryLegsSheet = workbook.Sheets['ReentryLegs'];
+      const exitStrategiesSheet = workbook.Sheets['ExitStrategies'];
+      const exitStrategySourceSheet = workbook.Sheets['ExitStrategySourceLegs'];
+      const exitStrategyEntrySheet = workbook.Sheets['ExitStrategyEntryLegs'];
       const settingsSheet = workbook.Sheets['Settings'];
 
       const tradesRows = tradesSheet ? (XLSX.utils.sheet_to_json(tradesSheet, { defval: '' }) as Record<string, unknown>[]) : [];
@@ -738,6 +817,15 @@ export function renderSettingsView(root: HTMLElement): void {
       const reentryLegRows = reentryLegsSheet
         ? (XLSX.utils.sheet_to_json(reentryLegsSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
+      const exitStrategyRows = exitStrategiesSheet
+        ? (XLSX.utils.sheet_to_json(exitStrategiesSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
+      const exitStrategySourceRows = exitStrategySourceSheet
+        ? (XLSX.utils.sheet_to_json(exitStrategySourceSheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
+      const exitStrategyEntryRows = exitStrategyEntrySheet
+        ? (XLSX.utils.sheet_to_json(exitStrategyEntrySheet, { defval: '' }) as Record<string, unknown>[])
+        : [];
       const settingsRows = settingsSheet
         ? (XLSX.utils.sheet_to_json(settingsSheet, { defval: '' }) as Record<string, unknown>[])
         : [];
@@ -747,6 +835,9 @@ export function renderSettingsView(root: HTMLElement): void {
       const lossLegs = parseRecoveryLossRows(recoveryLossRows);
       const reentryPlans = parseReentryPlanRows(reentryPlanRows);
       const reentryLegs = parseReentryLegRows(reentryLegRows);
+      const exitStrategies = parseExitStrategyRows(exitStrategyRows);
+      const exitSourceLegs = parseExitStrategySourceRows(exitStrategySourceRows);
+      const exitEntryLegs = parseExitStrategyEntryRows(exitStrategyEntryRows);
       if (legs.length && plans.length) {
         const map = new Map(plans.map((plan) => [plan.id, plan]));
         legs.forEach((leg) => {
@@ -780,6 +871,26 @@ export function renderSettingsView(root: HTMLElement): void {
           }
         });
       }
+      if (exitSourceLegs.length && exitStrategies.length) {
+        const map = new Map(exitStrategies.map((scenario) => [scenario.id, scenario]));
+        exitSourceLegs.forEach((leg) => {
+          const scenario = map.get(leg.scenarioId);
+          if (scenario) {
+            const { scenarioId: _scenarioId, ...rest } = leg;
+            scenario.sourceLegs.push(rest);
+          }
+        });
+      }
+      if (exitEntryLegs.length && exitStrategies.length) {
+        const map = new Map(exitStrategies.map((scenario) => [scenario.id, scenario]));
+        exitEntryLegs.forEach((leg) => {
+          const scenario = map.get(leg.scenarioId);
+          if (scenario) {
+            const { scenarioId: _scenarioId, ...rest } = leg;
+            scenario.entryLegs.push(rest);
+          }
+        });
+      }
 
       return {
         trades: parseTradeRows(tradesRows),
@@ -798,6 +909,12 @@ export function renderSettingsView(root: HTMLElement): void {
         reentryPlansPresent: Boolean(reentryPlansSheet || reentryLegsSheet),
         reentryLegs: reentryLegs,
         reentryLegsPresent: Boolean(reentryLegsSheet),
+        exitStrategies: exitStrategies,
+        exitStrategiesPresent: Boolean(exitStrategiesSheet || exitStrategySourceSheet || exitStrategyEntrySheet),
+        exitStrategySourceLegs: exitSourceLegs,
+        exitStrategySourceLegsPresent: Boolean(exitStrategySourceSheet),
+        exitStrategyEntryLegs: exitEntryLegs,
+        exitStrategyEntryLegsPresent: Boolean(exitStrategyEntrySheet),
         settings: parseSettingsRow(settingsRows),
         settingsPresent: Boolean(settingsSheet)
       };
@@ -837,6 +954,15 @@ export function renderSettingsView(root: HTMLElement): void {
         } else {
           const existing = await listReentryPlans(session.userId);
           await replaceReentryPlansForUser(session.userId, mergeById(existing, bundle.reentryPlans));
+        }
+      }
+
+      if (bundle.exitStrategiesPresent) {
+        if (mode === 'replace') {
+          await replaceExitStrategiesForUser(session.userId, bundle.exitStrategies);
+        } else {
+          const existing = await listExitStrategies(session.userId);
+          await replaceExitStrategiesForUser(session.userId, mergeById(existing, bundle.exitStrategies));
         }
       }
 
@@ -883,6 +1009,9 @@ export function renderSettingsView(root: HTMLElement): void {
           <div>Recovery Loss Legs: ${bundle.recoveryLossLegs.length}</div>
           <div>Re-entry Plans: ${bundle.reentryPlans.length}</div>
           <div>Re-entry Legs: ${bundle.reentryLegs.length}</div>
+          <div>Exit Strategies: ${bundle.exitStrategies.length}</div>
+          <div>Exit Source Legs: ${bundle.exitStrategySourceLegs.length}</div>
+          <div>Exit Entry Legs: ${bundle.exitStrategyEntryLegs.length}</div>
           <div>Settings: ${settingsCount}</div>
         </div>
       `;
@@ -893,12 +1022,13 @@ export function renderSettingsView(root: HTMLElement): void {
       const label = exportBtn.textContent || 'Export Excel';
       setBusy(exportBtn, true, label);
       try {
-        const [trades, transactions, goals, recoveryPlans, reentryPlans, settings] = await Promise.all([
+        const [trades, transactions, goals, recoveryPlans, reentryPlans, exitStrategies, settings] = await Promise.all([
           listTrades(session.userId),
           listTransactions(session.userId),
           listGoals(session.userId),
           listRecoveryPlans(session.userId),
           listReentryPlans(session.userId),
+          listExitStrategies(session.userId),
           getUserSettings(session.userId)
         ]);
         const history = transactions.filter((row) => !row.isTemplate);
@@ -1063,6 +1193,47 @@ export function renderSettingsView(root: HTMLElement): void {
             quantity: leg.quantity,
             buyPrice: leg.buyPrice,
             investedAmount: leg.investedAmount,
+            tradeDate: leg.tradeDate,
+            createdAt: leg.createdAt,
+            updatedAt: leg.updatedAt
+          }))
+        );
+
+        const exitStrategyRows = exitStrategies.map((scenario) => ({
+          id: scenario.id,
+          mode: scenario.mode,
+          status: scenario.status,
+          name: scenario.name ?? '',
+          notes: scenario.notes ?? '',
+          createdAt: scenario.createdAt,
+          updatedAt: scenario.updatedAt,
+          closedAt: scenario.closedAt ?? ''
+        }));
+
+        const exitStrategySourceRows = exitStrategies.flatMap((scenario) =>
+          scenario.sourceLegs.map((leg) => ({
+            id: leg.id,
+            scenarioId: scenario.id,
+            tradeId: leg.tradeId ?? '',
+            symbol: leg.symbol,
+            quantity: leg.quantity,
+            sellPrice: leg.sellPrice,
+            avgCost: leg.avgCost,
+            realizedLoss: leg.realizedLoss,
+            tradeDate: leg.tradeDate,
+            createdAt: leg.createdAt,
+            updatedAt: leg.updatedAt
+          }))
+        );
+
+        const exitStrategyEntryRows = exitStrategies.flatMap((scenario) =>
+          scenario.entryLegs.map((leg) => ({
+            id: leg.id,
+            scenarioId: scenario.id,
+            tradeId: leg.tradeId ?? '',
+            symbol: leg.symbol,
+            quantity: leg.quantity,
+            buyPrice: leg.buyPrice,
             tradeDate: leg.tradeDate,
             createdAt: leg.createdAt,
             updatedAt: leg.updatedAt
@@ -1258,6 +1429,43 @@ export function renderSettingsView(root: HTMLElement): void {
         );
         XLSX.utils.book_append_sheet(
           wb,
+          makeSheet(exitStrategyRows, ['id', 'mode', 'status', 'name', 'notes', 'createdAt', 'updatedAt', 'closedAt']),
+          'ExitStrategies'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(exitStrategySourceRows, [
+            'id',
+            'scenarioId',
+            'tradeId',
+            'symbol',
+            'quantity',
+            'sellPrice',
+            'avgCost',
+            'realizedLoss',
+            'tradeDate',
+            'createdAt',
+            'updatedAt'
+          ]),
+          'ExitStrategySourceLegs'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
+          makeSheet(exitStrategyEntryRows, [
+            'id',
+            'scenarioId',
+            'tradeId',
+            'symbol',
+            'quantity',
+            'buyPrice',
+            'tradeDate',
+            'createdAt',
+            'updatedAt'
+          ]),
+          'ExitStrategyEntryLegs'
+        );
+        XLSX.utils.book_append_sheet(
+          wb,
           makeSheet(settingsRows, [
             'totalInvestment',
             'maxAllocationPct',
@@ -1309,6 +1517,9 @@ export function renderSettingsView(root: HTMLElement): void {
           pendingImport.recoveryLossLegsPresent ||
           pendingImport.reentryPlansPresent ||
           pendingImport.reentryLegsPresent ||
+          pendingImport.exitStrategiesPresent ||
+          pendingImport.exitStrategySourceLegsPresent ||
+          pendingImport.exitStrategyEntryLegsPresent ||
           pendingImport.settingsPresent;
         if (!hasAnySheet) {
           pendingImport = null;

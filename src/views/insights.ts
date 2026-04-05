@@ -261,42 +261,45 @@ export function renderInsightsView(root: HTMLElement): void {
       title: 'Insights',
       subtitle: 'Strategy analysis, mistakes, and next actions.',
       content: `
-        <div id="insights-feedback" class="alert d-none" role="alert"></div>
+        <div class="insights-page">
+          <div id="insights-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
-          <div>
-            <h2 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('sparkles')}</span>
-              Insights
-            </h2>
-            <div class="text-muted small">Partial sell analysis, mistakes, and buy pack suggestions.</div>
-          </div>
-          <div class="d-flex align-items-center gap-2">
-            <div class="btn-group insights-range" role="group">
-              ${insightRanges
-                .map(
-                  (range) =>
-                    `<button class="btn btn-sm btn-outline-secondary ${range.id === 'all' ? 'active' : ''}" data-range="${
-                      range.id
-                    }" type="button">${range.label}</button>`
-                )
-                .join('')}
+          <div class="card insights-hero shadow-sm border-0">
+            <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div>
+                <div class="insights-eyebrow">Trade Review</div>
+                <h2 class="h5 mb-1 section-title">Insights</h2>
+                <div class="text-muted small">Review mistakes, partial sell decisions, and better next actions.</div>
+              </div>
+              <div class="card insights-range-card border-0 shadow-sm">
+                <div class="card-body d-flex flex-wrap align-items-center gap-2">
+                  <div class="btn-group insights-range" role="group">
+                    ${insightRanges
+                      .map(
+                        (range) =>
+                          `<button class="btn btn-sm btn-outline-secondary ${range.id === 'all' ? 'active' : ''}" data-range="${
+                            range.id
+                          }" type="button">${range.label}</button>`
+                      )
+                      .join('')}
+                  </div>
+                  <button class="btn btn-outline-secondary btn-sm" id="insights-sync">
+                    ${lucideIcon('refresh-ccw')} Sync
+                  </button>
+                </div>
+              </div>
             </div>
-            <button class="btn btn-outline-secondary btn-sm" id="insights-sync">
-              ${lucideIcon('refresh-ccw')} Sync
-            </button>
           </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-lg-7">
-            <div class="card shadow-sm border-0 h-100">
+          <div class="row g-3">
+            <div class="col-lg-7">
+              <div class="card insights-section-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('target')}</span>
-                    Partial Sell Strategy
-                  </h3>
+                  <div>
+                    <div class="insights-eyebrow">Simulation</div>
+                    <h3 class="h6 mb-0 section-title">Partial Sell Strategy</h3>
+                  </div>
                   <span class="text-muted small" id="partial-hold-benchmark">Hold benchmark: --</span>
                 </div>
                 <div class="row g-3">
@@ -319,14 +322,14 @@ export function renderInsightsView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-          <div class="col-lg-5">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="col-lg-5">
+              <div class="card insights-section-card shadow-sm border-0 h-100">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('alert-triangle')}</span>
-                    Mistakes Overview
-                  </h3>
+                  <div>
+                    <div class="insights-eyebrow">Overview</div>
+                    <h3 class="h6 mb-0 section-title">Mistakes Overview</h3>
+                  </div>
                   <span class="text-muted small" id="mistakes-count">--</span>
                 </div>
                 <div class="chart-wrap">
@@ -337,28 +340,24 @@ export function renderInsightsView(root: HTMLElement): void {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
+          <div class="row g-3">
+            <div class="col-lg-6">
+              <div class="card insights-section-card shadow-sm border-0 h-100">
               <div class="card-body">
-                <h3 class="h6 mb-3 section-title">
-                  <span class="section-icon">${lucideIcon('x-circle')}</span>
-                  Mistakes Log
-                </h3>
+                <div class="insights-eyebrow">Audit Trail</div>
+                <h3 class="h6 mb-3 section-title">Mistakes Log</h3>
                 <div id="mistakes-log" class="insight-list"></div>
                 <div id="mistakes-pagination" class="mt-2"></div>
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card shadow-sm border-0 h-100">
+            <div class="col-lg-6">
+              <div class="card insights-section-card shadow-sm border-0 h-100">
               <div class="card-body">
-                <h3 class="h6 mb-3 section-title">
-                  <span class="section-icon">${lucideIcon('shopping-bag')}</span>
-                  Buy Pack (Current Holdings)
-                </h3>
+                <div class="insights-eyebrow">Opportunity</div>
+                <h3 class="h6 mb-3 section-title">Buy Pack (Current Holdings)</h3>
                 <div class="text-muted small mb-2" id="buy-pack-summary">--</div>
                 <div class="table-responsive">
                   <table class="table table-sm insight-table align-middle mobile-stack mobile-toggle-details">
@@ -379,6 +378,7 @@ export function renderInsightsView(root: HTMLElement): void {
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </div>
       `

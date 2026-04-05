@@ -3,6 +3,7 @@ import {
   ACTIVITY_STORE,
   DB_NAME,
   DB_VERSION,
+  EXIT_STRATEGY_STORE,
   PRICES_STORE,
   SETTINGS_STORE,
   SESSION_KEY,
@@ -15,6 +16,7 @@ import {
   REENTRY_STORE
 } from '../core/constants';
 import type {
+  ExitStrategyScenario,
   GoalPlan,
   LivePrice,
   ReentryPlan,
@@ -79,6 +81,10 @@ export interface FinanceDb extends DBSchema {
     key: string;
     value: ReentryPlan;
   };
+  exitStrategies: {
+    key: string;
+    value: ExitStrategyScenario;
+  };
   sync: {
     key: string;
     value: SyncState;
@@ -120,6 +126,9 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
       if (!db.objectStoreNames.contains(REENTRY_STORE)) {
         db.createObjectStore(REENTRY_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(EXIT_STRATEGY_STORE)) {
+        db.createObjectStore(EXIT_STRATEGY_STORE, { keyPath: 'id' });
+      }
       if (!db.objectStoreNames.contains(SYNC_STORE)) {
         db.createObjectStore(SYNC_STORE, { keyPath: 'id' });
       }
@@ -141,6 +150,7 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
     !db.objectStoreNames.contains(GOALS_STORE) ||
     !db.objectStoreNames.contains(RECOVERY_STORE) ||
     !db.objectStoreNames.contains(REENTRY_STORE) ||
+    !db.objectStoreNames.contains(EXIT_STRATEGY_STORE) ||
     !db.objectStoreNames.contains(SYNC_STORE) ||
     !db.objectStoreNames.contains(PRICES_STORE) ||
     !db.objectStoreNames.contains(SETTINGS_STORE)

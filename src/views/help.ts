@@ -86,8 +86,8 @@ export function renderHelpView(root: HTMLElement): void {
                 <div class="help-step">
                   <div class="help-step-badge">4</div>
                   <div>
-                    <div class="fw-semibold">Review Recovery / Re-entry plans</div>
-                    <div class="text-muted small">Use Recovery Plans and Intraday Analysis to track strategic moves.</div>
+                    <div class="fw-semibold">Review Exit Strategy scenarios</div>
+                    <div class="text-muted small">Use Exit Strategy for re-entry, swap, and intraday target planning.</div>
                   </div>
                 </div>
               </div>
@@ -108,7 +108,7 @@ export function renderHelpView(root: HTMLElement): void {
               <ul class="help-list">
                 <li>Track holdings, trades, P/L, and insights.</li>
                 <li>Import trades from multiple broker formats with mapping review.</li>
-                <li>Use Recovery Plans and Re-entry Analysis to compare decisions.</li>
+                <li>Use Exit Strategy to compare re-entry, stock swap, and intraday decisions.</li>
                 <li>Work offline with auto-queue sync + snapshot retention.</li>
                 <li>Export data to Excel with one sheet per section.</li>
                 <li>Customize theme, font size, compact mode, and animations.</li>

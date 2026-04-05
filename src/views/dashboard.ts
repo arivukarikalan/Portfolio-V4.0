@@ -14,6 +14,7 @@ import { formatDateTime, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
 import { computeCurrentCycleState } from '../utils/tradeCycles';
 import { toErrorMessage } from '../utils/errors';
+import { mergeImportedTrades } from '../utils/mergedTrades';
 
 type HoldingSnapshot = {
   symbol: string;
@@ -143,6 +144,7 @@ export function renderDashboardView(root: HTMLElement): void {
       title: 'Dashboard',
       subtitle: 'Stay on top of your portfolio at a glance.',
       content: `
+        <div class="dashboard-page">
         <div id="dashboard-feedback" class="alert d-none" role="alert"></div>
 
         <div class="row g-3 mb-3">
@@ -195,7 +197,7 @@ export function renderDashboardView(root: HTMLElement): void {
               <div class="card-body">
                 <div class="section-title mb-2">
                   <span class="section-icon">${lucideIcon('activity')}</span>
-                  System Status
+                  Account & Sync
                 </div>
                 <div class="status-grid">
                   <div class="status-item">
@@ -231,7 +233,7 @@ export function renderDashboardView(root: HTMLElement): void {
           <div class="dashboard-strip-head">
             <div class="dashboard-strip-label section-title">
               <span class="section-icon">${lucideIcon('trending-up')}</span>
-              Top gainers
+              Top movers today
             </div>
           </div>
           <div class="dashboard-strip-items" id="gainer-strip"></div>
@@ -430,6 +432,7 @@ export function renderDashboardView(root: HTMLElement): void {
             </div>
           </div>
         </div>
+        </div>
       `
     });
 
@@ -441,7 +444,6 @@ export function renderDashboardView(root: HTMLElement): void {
     const onboardingCard = root.querySelector<HTMLDivElement>('#onboarding-card');
     const onboardingCol = root.querySelector<HTMLDivElement>('#onboarding-col');
     const statusCol = root.querySelector<HTMLDivElement>('#status-col');
-    const onboardingDismiss = root.querySelector<HTMLButtonElement>('#onboarding-dismiss');
     const statusCloud = root.querySelector<HTMLDivElement>('#status-cloud');
     const statusPending = root.querySelector<HTMLDivElement>('#status-pending');
     const statusLastPush = root.querySelector<HTMLDivElement>('#status-last-push');
@@ -471,19 +473,21 @@ export function renderDashboardView(root: HTMLElement): void {
     const allocationCanvas = root.querySelector<HTMLCanvasElement>('#allocation-chart');
     const allocationEmpty = root.querySelector<HTMLDivElement>('#allocation-empty');
     const allocationLegend = root.querySelector<HTMLDivElement>('#allocation-legend');
-    const exposureCanvas = root.querySelector<HTMLCanvasElement>('#exposure-chart');
-    const exposureEmpty = root.querySelector<HTMLDivElement>('#exposure-empty');
-    const exposureCount = root.querySelector<HTMLSpanElement>('#exposure-count');
+    const kpiRow = dashInvested?.closest('.row');
+    const recentActivity = root.querySelector<HTMLDivElement>('#recent-activity');
+    const recentCol = recentActivity?.closest<HTMLDivElement>('.col-lg-6');
+    const exposureCol = root.querySelector<HTMLCanvasElement>('#exposure-chart')?.closest<HTMLDivElement>('.col-lg-6');
+    const onboardingTemplate = onboardingCard?.innerHTML || '';
 
     let trades: TradeRecord[] = [];
     let holdings: HoldingSnapshot[] = [];
     let trendData: TrendPoint[] = [];
     let allocationChart: Chart | null = null;
     let trendChart: Chart | null = null;
-    let exposureChart: Chart | null = null;
     let rangeId = '1y';
     let allocationLimit = 0;
     let priceMap = new Map<string, number>();
+    let latestRefreshLabel = '--';
 
     const updateRangeButtons = () => {
       root.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((btn) => {
@@ -500,14 +504,75 @@ export function renderDashboardView(root: HTMLElement): void {
       if (!onboardingCol || !statusCol || !onboardingCard) return;
       const key = `${ONBOARDING_KEY}:${session.userId}`;
       const dismissed = localStorage.getItem(key) === 'hidden';
-      const shouldShow = !dismissed && trades.length === 0;
-      onboardingCol.classList.toggle('d-none', !shouldShow);
-      if (!shouldShow) {
+      const hasTrades = trades.length > 0;
+      const shouldShowOnboarding = !dismissed && !hasTrades;
+
+      if (kpiRow) kpiRow.classList.add('d-none');
+      if (exposureCol) exposureCol.classList.add('d-none');
+      if (recentCol) {
+        recentCol.classList.remove('col-lg-6');
+        recentCol.classList.add('col-lg-12');
+      }
+
+      statusCol.classList.add('col-lg-5');
+      statusCol.classList.remove('col-lg-12');
+
+      if (hasTrades) {
+        onboardingCol.classList.remove('d-none');
+        onboardingCard.classList.add('dashboard-summary-card');
+        const invested = holdings.reduce((sum, row) => sum + row.invested, 0);
+        const value = holdings.reduce((sum, row) => sum + row.currentValue, 0);
+        const pnl = value - invested;
+        const pnlPct = invested ? (pnl / invested) * 100 : 0;
+        const greenCount = holdings.filter((row) => row.pnl >= 0).length;
+        const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
+        const pillClass = pnlPct >= 0 ? 'dashboard-summary-pill positive' : 'dashboard-summary-pill negative';
+        onboardingCard.innerHTML = `
+          <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                  <div>
+                <div class="section-title mb-1">Portfolio Pulse</div>
+                    <div class="text-muted small">A lighter summary with the numbers that matter first.</div>
+                  </div>
+              <div class="dashboard-summary-actions">
+                <a class="btn btn-sm btn-outline-secondary" href="holdings.html">${lucideIcon('pie-chart')} Holdings</a>
+                <a class="btn btn-sm btn-outline-secondary" href="exit-strategy.html">${lucideIcon('crosshair')} Exit Strategy</a>
+              </div>
+            </div>
+            <div class="dashboard-summary-main mt-3">
+              <div class="dashboard-summary-kicker">Current portfolio value</div>
+              <div class="dashboard-summary-value">${formatMoney(value)}</div>
+              <div class="dashboard-summary-change">
+                <span class="dashboard-summary-pnl ${pnlClass}">${formatMoney(pnl)}</span>
+                <span class="${pillClass}">${formatPct(pnlPct)}</span>
+              </div>
+              <div class="text-muted small">Last refresh: ${latestRefreshLabel}</div>
+            </div>
+            <div class="dashboard-summary-grid mt-3">
+              <div class="dashboard-summary-stat">
+                <div class="dashboard-summary-stat-label">Invested</div>
+                <div class="dashboard-summary-stat-value">${formatMoney(invested)}</div>
+              </div>
+              <div class="dashboard-summary-stat">
+                <div class="dashboard-summary-stat-label">Open Positions</div>
+                <div class="dashboard-summary-stat-value">${holdings.length}</div>
+              </div>
+              <div class="dashboard-summary-stat">
+                <div class="dashboard-summary-stat-label">Green Positions</div>
+                <div class="dashboard-summary-stat-value">${greenCount}</div>
+              </div>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      onboardingCard.classList.remove('dashboard-summary-card');
+      onboardingCard.innerHTML = onboardingTemplate;
+      onboardingCol.classList.toggle('d-none', !shouldShowOnboarding);
+      if (!shouldShowOnboarding) {
         statusCol.classList.remove('col-lg-5');
         statusCol.classList.add('col-lg-12');
-      } else {
-        statusCol.classList.add('col-lg-5');
-        statusCol.classList.remove('col-lg-12');
       }
     };
 
@@ -533,13 +598,15 @@ export function renderDashboardView(root: HTMLElement): void {
         .map((item, index) => {
           const pnlClass = item.pnl >= 0 ? 'text-success' : 'text-danger';
           const color = avatarColors[index % avatarColors.length];
+          const leadClass = index === 0 ? 'strip-card-lead' : '';
           return `
-            <div class="strip-card">
+            <div class="strip-card ${leadClass}">
+              <div class="strip-rank">#${index + 1}</div>
               <div class="strip-details">
                 <div class="strip-avatar" style="background:${color}">${item.symbol.slice(0, 1)}</div>
                 <div>
                   <div class="strip-symbol">${item.symbol}</div>
-                  <div class="strip-price">${formatMoney(item.currentValue / item.qty)}</div>
+                  <div class="strip-price">${formatMoney(item.currentValue / item.qty)} • ${formatMoney(item.pnl)}</div>
                 </div>
               </div>
               <div class="strip-pnl ${pnlClass}">${formatPct(item.pnlPct)}</div>
@@ -853,61 +920,15 @@ export function renderDashboardView(root: HTMLElement): void {
       }
     };
 
-    const renderExposure = () => {
-      if (!exposureCanvas) return;
-      if (exposureChart) exposureChart.destroy();
-      const dark = isDarkTheme();
-      const top = holdings.slice(0, 6);
-      if (!top.length) {
-        exposureCanvas.classList.add('d-none');
-        exposureEmpty?.classList.remove('d-none');
-        return;
-      }
-      exposureCanvas.classList.remove('d-none');
-      exposureEmpty?.classList.add('d-none');
-      if (exposureCount) exposureCount.textContent = `${top.length} tickers`;
-      const config: ChartConfiguration<'bar', number[], string> = {
-        type: 'bar',
-        data: {
-          labels: top.map((row) => row.symbol),
-          datasets: [
-            {
-              label: 'Value',
-              data: top.map((row) => row.currentValue),
-              backgroundColor: chartPalette[0],
-              borderRadius: 10,
-              barThickness: 18
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          indexAxis: 'y',
-          scales: {
-            x: {
-              grid: { color: dark ? 'rgba(148, 163, 184, 0.2)' : '#eef2f6' },
-              ticks: {
-                color: dark ? '#94a3b8' : '#64748b',
-                callback: (val) => formatMoney(Number(val)),
-                font: { size: 11, weight: 600 }
-              }
-            },
-            y: {
-              grid: { display: false },
-              ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 11, weight: 600 } }
-            }
-          }
-        }
-      };
-      exposureChart = new Chart(exposureCanvas, config);
-    };
-
     const renderRecent = () => {
       const container = root.querySelector<HTMLDivElement>('#recent-activity');
       if (!container) return;
-      const recent = [...trades].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate)).slice(0, 5);
+      const recent = mergeImportedTrades(trades)
+        .sort((a, b) => {
+          if (a.tradeDate !== b.tradeDate) return b.tradeDate.localeCompare(a.tradeDate);
+          return b.updatedAt.localeCompare(a.updatedAt);
+        })
+        .slice(0, 5);
       if (!recent.length) {
         container.innerHTML = '<div class="text-muted small">No recent trades.</div>';
         return;
@@ -915,6 +936,7 @@ export function renderDashboardView(root: HTMLElement): void {
       container.innerHTML = recent
         .map((trade) => {
           const sideBadge = trade.side === 'BUY' ? 'text-bg-success' : 'text-bg-danger';
+          const fillsLabel = trade.fillCount > 1 ? ` • Fills ${trade.fillCount}` : '';
           return `
             <div class="dash-activity-item">
               <div class="d-flex justify-content-between">
@@ -924,7 +946,7 @@ export function renderDashboardView(root: HTMLElement): void {
                 </div>
                 <div class="text-end">
                   <span class="badge ${sideBadge}">${trade.side}</span>
-                  <div class="small">${trade.quantity} @ ${formatMoney(trade.price)}</div>
+                  <div class="small">${trade.quantity} @ ${formatMoney(trade.price)}${fillsLabel}</div>
                 </div>
               </div>
             </div>
@@ -966,13 +988,13 @@ export function renderDashboardView(root: HTMLElement): void {
         if (!latest) return row.fetchedAt;
         return row.fetchedAt > latest ? row.fetchedAt : latest;
       }, null);
-      if (lastRefresh) lastRefresh.textContent = `Last refresh: ${formatDateTime(latestPriceAt)}`;
+      latestRefreshLabel = formatDateTime(latestPriceAt);
+      if (lastRefresh) lastRefresh.textContent = `Last refresh: ${latestRefreshLabel}`;
 
       renderKpis();
       updateMetricHoldings();
       renderTrend();
       renderAllocation();
-      renderExposure();
       renderRecent();
       updateOnboarding();
       await updateSystemStatus();
@@ -981,12 +1003,14 @@ export function renderDashboardView(root: HTMLElement): void {
     const handleThemeChange = () => {
       renderTrend();
       renderAllocation();
-      renderExposure();
     };
 
     window.addEventListener('ui-theme-change', handleThemeChange);
 
-    onboardingDismiss?.addEventListener('click', () => {
+    root.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null;
+      const dismiss = target?.closest<HTMLButtonElement>('#onboarding-dismiss');
+      if (!dismiss) return;
       const key = `${ONBOARDING_KEY}:${session.userId}`;
       localStorage.setItem(key, 'hidden');
       updateOnboarding();

@@ -194,310 +194,335 @@ export function renderPnlView(root: HTMLElement): void {
       title: 'Profit & Loss',
       subtitle: 'Analyze realized results, streaks, and risk exposure.',
       content: `
-        <div id="pnl-feedback" class="alert d-none" role="alert"></div>
+        <div class="pnl-page">
+          <div id="pnl-feedback" class="alert d-none" role="alert"></div>
 
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
-          <div>
-            <h2 class="h5 mb-1 section-title">
-              <span class="section-icon">${lucideIcon('trending-up')}</span>
-              Profit &amp; Loss
-            </h2>
-            <div class="text-muted small">Realized performance, fees, and trade quality signals.</div>
-          </div>
-          <div class="d-flex align-items-center gap-3 flex-wrap">
-            <div class="form-check form-switch pnl-toggle me-2">
-              <input class="form-check-input" type="checkbox" id="pnl-unrealized">
-              <label class="form-check-label small" for="pnl-unrealized">Show realized only</label>
-            </div>
-            <button class="btn btn-outline-secondary btn-sm" id="pnl-sync">
-              ${lucideIcon('refresh-ccw')} Sync
-            </button>
-          </div>
-        </div>
-
-        <div class="pnl-range mb-3" role="group">
-          ${pnlRanges
-            .map(
-              (range) =>
-                `<button class="btn btn-sm btn-outline-secondary ${range.id === '6m' ? 'active' : ''}" data-range="${
-                  range.id
-                }" type="button">${range.label}</button>`
-            )
-            .join('')}
-        </div>
-
-        <div class="row g-3 mb-3">
-          <div class="col-6 col-lg-3">
-            <div class="card pnl-kpi shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon teal">${lucideIcon('check-circle')}</span>
-                  Realized P/L
+          <div class="card shadow-sm border-0 pnl-hero mb-3">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                <div>
+                  <div class="pnl-eyebrow">Performance review</div>
+                  <h2 class="h5 mb-1 section-title">
+                    <span class="section-icon">${lucideIcon('trending-up')}</span>
+                    Profit &amp; Loss
+                  </h2>
+                  <div class="text-muted small">Realized performance, fees, and trade quality signals.</div>
                 </div>
-                <div class="h5 mb-0" id="pnl-realized">--</div>
+                <div class="d-flex align-items-center gap-3 flex-wrap pnl-hero-actions">
+                  <div class="form-check form-switch pnl-toggle me-2">
+                    <input class="form-check-input" type="checkbox" id="pnl-unrealized">
+                    <label class="form-check-label small" for="pnl-unrealized">Show realized only</label>
+                  </div>
+                  <button class="btn btn-outline-secondary btn-sm" id="pnl-sync">
+                    ${lucideIcon('refresh-ccw')} Sync
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-          <div class="col-6 col-lg-3">
-            <div class="card pnl-kpi shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon indigo">${lucideIcon('circle-dashed')}</span>
-                  Unrealized P/L
-                </div>
-                <div class="h5 mb-0" id="pnl-unrealized-value">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-6 col-lg-3">
-            <div class="card pnl-kpi shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon amber">${lucideIcon('layers')}</span>
-                  Net P/L
-                </div>
-                <div class="h5 mb-0" id="pnl-net">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-6 col-lg-3">
-            <div class="card pnl-kpi shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small kpi-label">
-                  <span class="label-icon rose">${lucideIcon('receipt')}</span>
-                  Fees
-                </div>
-                <div class="h5 mb-0" id="pnl-fees">--</div>
-                <div class="small text-muted" id="pnl-fees-meta">--</div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-lg-7">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="pnl-trend-header">
-                  <div>
+          <div class="card shadow-sm border-0 pnl-range-card mb-3">
+            <div class="card-body">
+              <div class="pnl-range" role="group">
+                ${pnlRanges
+                  .map(
+                    (range) =>
+                      `<button class="btn btn-sm btn-outline-secondary ${range.id === '6m' ? 'active' : ''}" data-range="${
+                        range.id
+                      }" type="button">${range.label}</button>`
+                  )
+                  .join('')}
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-6 col-lg-3">
+              <div class="card pnl-kpi shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon teal">${lucideIcon('check-circle')}</span>
+                    Realized P/L
+                  </div>
+                  <div class="h5 mb-0" id="pnl-realized">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card pnl-kpi shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon indigo">${lucideIcon('circle-dashed')}</span>
+                    Unrealized P/L
+                  </div>
+                  <div class="h5 mb-0" id="pnl-unrealized-value">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card pnl-kpi shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon amber">${lucideIcon('layers')}</span>
+                    Net P/L
+                  </div>
+                  <div class="h5 mb-0" id="pnl-net">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-lg-3">
+              <div class="card pnl-kpi shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small kpi-label">
+                    <span class="label-icon rose">${lucideIcon('receipt')}</span>
+                    Fees
+                  </div>
+                  <div class="h5 mb-0" id="pnl-fees">--</div>
+                  <div class="small text-muted" id="pnl-fees-meta">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-lg-7">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="pnl-trend-header">
+                    <div>
+                      <div class="pnl-eyebrow">Primary view</div>
+                      <h3 class="h6 mb-1 section-title">
+                        <span class="section-icon">${lucideIcon('line-chart')}</span>
+                        P&amp;L Trend
+                      </h3>
+                      <div class="text-muted small">Realized P/L only (daily).</div>
+                    </div>
+                    <div class="pnl-trend-metrics">
+                      <div>
+                        <div class="text-muted small">Total Value</div>
+                        <div class="fw-semibold" id="pnl-total-value">--</div>
+                      </div>
+                      <div>
+                        <div class="text-muted small">Cost Basis</div>
+                        <div class="fw-semibold" id="pnl-cost-basis">--</div>
+                      </div>
+                      <div>
+                        <div class="text-muted small">Change (1D)</div>
+                        <div class="fw-semibold" id="pnl-change">--</div>
+                        <div class="small" id="pnl-change-meta">--</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="chart-wrap">
+                    <canvas id="pnl-trend-chart" height="240"></canvas>
+                    <div class="chart-empty text-muted small d-none" id="pnl-trend-empty">No realized trades yet.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-5">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="pnl-overview-header">
+                    <div class="pnl-eyebrow">Mix</div>
                     <h3 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('line-chart')}</span>
-                      P&amp;L Trend
+                      <span class="section-icon">${lucideIcon('pie-chart')}</span>
+                      P&amp;L Overview
                     </h3>
-                    <div class="text-muted small">Realized P/L only (daily).</div>
+                    <div class="text-muted small">Revenue, expenses, and mix.</div>
                   </div>
-                  <div class="pnl-trend-metrics">
+                  <div class="pnl-overview-metrics">
                     <div>
-                      <div class="text-muted small">Total Value</div>
-                      <div class="fw-semibold" id="pnl-total-value">--</div>
+                      <div class="text-muted small">Total Revenue</div>
+                      <div class="fw-semibold" id="pnl-revenue">--</div>
                     </div>
                     <div>
-                      <div class="text-muted small">Cost Basis</div>
-                      <div class="fw-semibold" id="pnl-cost-basis">--</div>
+                      <div class="text-muted small">Operating Expenses</div>
+                      <div class="fw-semibold" id="pnl-expenses">--</div>
                     </div>
                     <div>
-                      <div class="text-muted small">Change (1D)</div>
-                      <div class="fw-semibold" id="pnl-change">--</div>
-                      <div class="small" id="pnl-change-meta">--</div>
+                      <div class="text-muted small">Net Profit</div>
+                      <div class="fw-semibold" id="pnl-net-profit">--</div>
+                    </div>
+                  </div>
+                  <div class="pnl-overview-chart">
+                    <div class="chart-wrap pnl-mini-chart">
+                      <canvas id="pnl-overview-pie" height="180"></canvas>
+                    </div>
+                    <div class="pnl-pie-legend">
+                      <span><span class="pnl-legend-dot pnl-legend-profit"></span>Profit</span>
+                      <span><span class="pnl-legend-dot pnl-legend-loss"></span>Loss</span>
+                      <span><span class="pnl-legend-dot pnl-legend-fees"></span>Fees</span>
                     </div>
                   </div>
                 </div>
-                <div class="chart-wrap">
-                  <canvas id="pnl-trend-chart" height="240"></canvas>
-                  <div class="chart-empty text-muted small d-none" id="pnl-trend-empty">No realized trades yet.</div>
-                </div>
               </div>
             </div>
           </div>
-          <div class="col-lg-5">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="pnl-overview-header">
-                  <h3 class="h6 mb-1 section-title">
-                    <span class="section-icon">${lucideIcon('pie-chart')}</span>
-                    P&amp;L Overview
-                  </h3>
-                  <div class="text-muted small">Revenue, expenses, and mix.</div>
-                </div>
-                <div class="pnl-overview-metrics">
-                  <div>
-                    <div class="text-muted small">Total Revenue</div>
-                    <div class="fw-semibold" id="pnl-revenue">--</div>
-                  </div>
-                  <div>
-                    <div class="text-muted small">Operating Expenses</div>
-                    <div class="fw-semibold" id="pnl-expenses">--</div>
-                  </div>
-                  <div>
-                    <div class="text-muted small">Net Profit</div>
-                    <div class="fw-semibold" id="pnl-net-profit">--</div>
-                  </div>
-                </div>
-                <div class="pnl-overview-chart">
-                  <div class="chart-wrap pnl-mini-chart">
-                    <canvas id="pnl-overview-pie" height="180"></canvas>
-                  </div>
-                  <div class="pnl-pie-legend">
-                    <span><span class="pnl-legend-dot pnl-legend-profit"></span>Profit</span>
-                    <span><span class="pnl-legend-dot pnl-legend-loss"></span>Loss</span>
-                    <span><span class="pnl-legend-dot pnl-legend-fees"></span>Fees</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-12">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('bar-chart-3')}</span>
-                    Monthly P&amp;L
-                  </h3>
-                  <span class="text-muted small">Profit vs loss by month</span>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="pnl-monthly-bar" height="220"></canvas>
-                  <div class="chart-empty text-muted small d-none" id="pnl-monthly-empty">No data for this range.</div>
+          <div class="row g-3 mb-3">
+            <div class="col-12">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                      <div class="pnl-eyebrow">Time view</div>
+                      <h3 class="h6 mb-0 section-title">
+                        <span class="section-icon">${lucideIcon('bar-chart-3')}</span>
+                        Monthly P&amp;L
+                      </h3>
+                    </div>
+                    <span class="text-muted small">Profit vs loss by month</span>
+                  </div>
+                  <div class="chart-wrap">
+                    <canvas id="pnl-monthly-bar" height="220"></canvas>
+                    <div class="chart-empty text-muted small d-none" id="pnl-monthly-empty">No data for this range.</div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-12">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0 section-title">
-                    <span class="section-icon">${lucideIcon('bar-chart-4')}</span>
-                    Stock-wise P&amp;L
-                  </h3>
-                  <span class="text-muted small">Based on selected range</span>
-                </div>
-                <div class="chart-wrap">
-                  <canvas id="pnl-stock-bar" height="260"></canvas>
-                  <div class="chart-empty text-muted small d-none" id="pnl-stock-empty">No trades in this range.</div>
+          <div class="row g-3 mb-3">
+            <div class="col-12">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                      <div class="pnl-eyebrow">Symbol view</div>
+                      <h3 class="h6 mb-0 section-title">
+                        <span class="section-icon">${lucideIcon('bar-chart-4')}</span>
+                        Stock-wise P&amp;L
+                      </h3>
+                    </div>
+                    <span class="text-muted small">Based on selected range</span>
+                  </div>
+                  <div class="chart-wrap">
+                    <canvas id="pnl-stock-bar" height="260"></canvas>
+                    <div class="chart-empty text-muted small d-none" id="pnl-stock-empty">No trades in this range.</div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div class="row g-3 mb-3">
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Win Rate</div>
-                <div class="h6 mb-0" id="pnl-win-rate">--</div>
+          <div class="row g-3 mb-3">
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Win Rate</div>
+                  <div class="h6 mb-0" id="pnl-win-rate">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Profit Factor</div>
+                  <div class="h6 mb-0" id="pnl-profit-factor">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Avg Win</div>
+                  <div class="h6 mb-0" id="pnl-avg-win">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Avg Loss</div>
+                  <div class="h6 mb-0" id="pnl-avg-loss">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Max Drawdown</div>
+                  <div class="h6 mb-0" id="pnl-drawdown">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Expectancy</div>
+                  <div class="h6 mb-0" id="pnl-expectancy">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Best Trade</div>
+                  <div class="h6 mb-0" id="pnl-best-trade">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <div class="card pnl-stat shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="text-muted small">Worst Trade</div>
+                  <div class="h6 mb-0" id="pnl-worst-trade">--</div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Profit Factor</div>
-                <div class="h6 mb-0" id="pnl-profit-factor">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Avg Win</div>
-                <div class="h6 mb-0" id="pnl-avg-win">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Avg Loss</div>
-                <div class="h6 mb-0" id="pnl-avg-loss">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Max Drawdown</div>
-                <div class="h6 mb-0" id="pnl-drawdown">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Expectancy</div>
-                <div class="h6 mb-0" id="pnl-expectancy">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Best Trade</div>
-                <div class="h6 mb-0" id="pnl-best-trade">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="card pnl-stat shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="text-muted small">Worst Trade</div>
-                <div class="h6 mb-0" id="pnl-worst-trade">--</div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div class="row g-3">
-          <div class="col-lg-6">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0">Top Winners</h3>
-                  <span class="text-muted small" id="pnl-winners-count">--</span>
-                </div>
-                <div class="table-responsive">
-                  <table class="table table-sm pnl-table align-middle">
-                    <thead>
-                      <tr>
-                        <th>Symbol</th>
-                        <th class="text-end">P/L</th>
-                        <th class="text-end">Qty</th>
-                        <th class="text-end">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody id="pnl-winners"></tbody>
-                  </table>
+          <div class="row g-3">
+            <div class="col-lg-6">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                      <div class="pnl-eyebrow">Leaders</div>
+                      <h3 class="h6 mb-0">Top Winners</h3>
+                    </div>
+                    <span class="text-muted small" id="pnl-winners-count">--</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm pnl-table align-middle">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th class="text-end">P/L</th>
+                          <th class="text-end">Qty</th>
+                          <th class="text-end">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody id="pnl-winners"></tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div class="col-lg-6">
-            <div class="card pnl-card shadow-sm border-0 h-100">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h3 class="h6 mb-0">Top Losers</h3>
-                  <span class="text-muted small" id="pnl-losers-count">--</span>
-                </div>
-                <div class="table-responsive">
-                  <table class="table table-sm pnl-table align-middle">
-                    <thead>
-                      <tr>
-                        <th>Symbol</th>
-                        <th class="text-end">P/L</th>
-                        <th class="text-end">Qty</th>
-                        <th class="text-end">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody id="pnl-losers"></tbody>
-                  </table>
+            <div class="col-lg-6">
+              <div class="card pnl-card shadow-sm border-0 h-100">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                      <div class="pnl-eyebrow">Draggers</div>
+                      <h3 class="h6 mb-0">Top Losers</h3>
+                    </div>
+                    <span class="text-muted small" id="pnl-losers-count">--</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm pnl-table align-middle">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th class="text-end">P/L</th>
+                          <th class="text-end">Qty</th>
+                          <th class="text-end">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody id="pnl-losers"></tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </div>

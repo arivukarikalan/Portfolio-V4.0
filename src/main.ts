@@ -14,6 +14,7 @@ const allowed: AppView[] = [
   'dashboard',
   'holdings',
   'trades',
+  'exit-strategy',
   'insights',
   'target',
   'transactions',
