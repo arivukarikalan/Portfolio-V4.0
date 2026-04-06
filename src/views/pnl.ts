@@ -29,6 +29,42 @@ type Lot = {
   date: string | null;
 };
 
+type StockAnalysis = {
+  symbol: string;
+  realizedPnl: number;
+  realizedCost: number;
+  realizedProceeds: number;
+  realizedQty: number;
+  buyValue: number;
+  sellValue: number;
+  tradeCount: number;
+  buyCount: number;
+  sellCount: number;
+  fees: {
+    buyFees: number;
+    sellFees: number;
+    dpFees: number;
+    total: number;
+  };
+  openQty: number;
+  avgBuy: number | null;
+  ltp: number | null;
+  openCost: number;
+  currentValue: number;
+  unrealizedPnl: number;
+  netPnl: number;
+  bestTrade: number | null;
+  worstTrade: number | null;
+  events: Array<{
+    side: 'BUY' | 'SELL';
+    date: string;
+    qty: number;
+    price: number;
+    value: number;
+  }>;
+  insight: string;
+};
+
 const pnlRanges = [
   { id: '1m', label: '1M', days: 30 },
   { id: '3m', label: '3M', days: 90 },
@@ -324,35 +360,34 @@ export function renderPnlView(root: HTMLElement): void {
               <div class="card pnl-card shadow-sm border-0 h-100">
                 <div class="card-body">
                   <div class="pnl-overview-header">
-                    <div class="pnl-eyebrow">Mix</div>
+                    <div class="pnl-eyebrow">Deep dive</div>
                     <h3 class="h6 mb-1 section-title">
-                      <span class="section-icon">${lucideIcon('pie-chart')}</span>
-                      P&amp;L Overview
+                      <span class="section-icon">${lucideIcon('search')}</span>
+                      Stock-wise P&amp;L Analysis
                     </h3>
-                    <div class="text-muted small">Revenue, expenses, and mix.</div>
+                    <div class="text-muted small">Search one stock and review the full profit and loss story.</div>
                   </div>
-                  <div class="pnl-overview-metrics">
-                    <div>
-                      <div class="text-muted small">Total Revenue</div>
-                      <div class="fw-semibold" id="pnl-revenue">--</div>
-                    </div>
-                    <div>
-                      <div class="text-muted small">Operating Expenses</div>
-                      <div class="fw-semibold" id="pnl-expenses">--</div>
-                    </div>
-                    <div>
-                      <div class="text-muted small">Net Profit</div>
-                      <div class="fw-semibold" id="pnl-net-profit">--</div>
-                    </div>
+                  <div class="pnl-stock-search-wrap mb-3">
+                    <input class="form-control" type="search" id="pnl-stock-search" list="pnl-stock-options" placeholder="Search stock symbol" autocomplete="off" />
+                    <datalist id="pnl-stock-options"></datalist>
                   </div>
-                  <div class="pnl-overview-chart">
-                    <div class="chart-wrap pnl-mini-chart">
-                      <canvas id="pnl-overview-pie" height="180"></canvas>
+                  <div class="pnl-stock-chips mb-3" id="pnl-stock-chips"></div>
+                  <div class="pnl-stock-focus">
+                    <div class="pnl-stock-focus-header">
+                      <div>
+                        <div class="pnl-stock-focus-symbol" id="pnl-stock-selected">--</div>
+                        <div class="pnl-stock-focus-note text-muted small" id="pnl-stock-note">Pick a stock to inspect its full P&amp;L breakdown.</div>
+                      </div>
+                      <div class="pnl-stock-focus-net" id="pnl-stock-net">--</div>
                     </div>
-                    <div class="pnl-pie-legend">
-                      <span><span class="pnl-legend-dot pnl-legend-profit"></span>Profit</span>
-                      <span><span class="pnl-legend-dot pnl-legend-loss"></span>Loss</span>
-                      <span><span class="pnl-legend-dot pnl-legend-fees"></span>Fees</span>
+                    <div class="pnl-stock-ribbon" id="pnl-stock-ribbon"></div>
+                    <div class="pnl-stock-bridge">
+                      <div class="pnl-stock-subtitle">P&amp;L Bridge</div>
+                      <div class="pnl-stock-bridge-steps" id="pnl-stock-bridge"></div>
+                    </div>
+                    <div class="pnl-stock-journey-wrap">
+                      <div class="pnl-stock-subtitle">Trade Journey</div>
+                      <div class="pnl-stock-journey" id="pnl-stock-journey"></div>
                     </div>
                   </div>
                 </div>
@@ -395,7 +430,7 @@ export function renderPnlView(root: HTMLElement): void {
                         Stock-wise P&amp;L
                       </h3>
                     </div>
-                    <span class="text-muted small">Based on selected range</span>
+                    <span class="text-muted small">Selected stock highlighted in the bubble map</span>
                   </div>
                   <div class="chart-wrap">
                     <canvas id="pnl-stock-bar" height="260"></canvas>
@@ -563,10 +598,15 @@ export function renderPnlView(root: HTMLElement): void {
     const costBasisEl = root.querySelector<HTMLDivElement>('#pnl-cost-basis');
     const changeEl = root.querySelector<HTMLDivElement>('#pnl-change');
     const changeMetaEl = root.querySelector<HTMLDivElement>('#pnl-change-meta');
-    const revenueEl = root.querySelector<HTMLDivElement>('#pnl-revenue');
-    const expensesEl = root.querySelector<HTMLDivElement>('#pnl-expenses');
-    const netProfitEl = root.querySelector<HTMLDivElement>('#pnl-net-profit');
-    const overviewPieCanvas = root.querySelector<HTMLCanvasElement>('#pnl-overview-pie');
+    const stockSearchInput = root.querySelector<HTMLInputElement>('#pnl-stock-search');
+    const stockOptionsEl = root.querySelector<HTMLDataListElement>('#pnl-stock-options');
+    const stockChipsEl = root.querySelector<HTMLDivElement>('#pnl-stock-chips');
+    const stockSelectedEl = root.querySelector<HTMLDivElement>('#pnl-stock-selected');
+    const stockNoteEl = root.querySelector<HTMLDivElement>('#pnl-stock-note');
+    const stockNetEl = root.querySelector<HTMLDivElement>('#pnl-stock-net');
+    const stockRibbonEl = root.querySelector<HTMLDivElement>('#pnl-stock-ribbon');
+    const stockBridgeEl = root.querySelector<HTMLDivElement>('#pnl-stock-bridge');
+    const stockJourneyEl = root.querySelector<HTMLDivElement>('#pnl-stock-journey');
 
     const winnersEl = root.querySelector<HTMLTableSectionElement>('#pnl-winners');
     const losersEl = root.querySelector<HTMLTableSectionElement>('#pnl-losers');
@@ -580,10 +620,10 @@ export function renderPnlView(root: HTMLElement): void {
     let includeUnrealized = false;
     let latestUnrealized = { invested: 0, value: 0, pnl: 0 };
     let rangeId = '6m';
+    let selectedSymbol = '';
     let trendChart: Chart | null = null;
     let monthlyChart: Chart | null = null;
     let stockChart: Chart | null = null;
-    let overviewPieChart: Chart | null = null;
 
     const getRangeStart = () => {
       const range = pnlRanges.find((option) => option.id === rangeId);
@@ -596,6 +636,113 @@ export function renderPnlView(root: HTMLElement): void {
     const filterEntries = () => {
       const start = getRangeStart();
       return start ? realizedEntries.filter((entry) => entry.date >= start) : realizedEntries;
+    };
+
+    const getFilteredTrades = () => {
+      const start = getRangeStart();
+      return start ? trades.filter((trade) => trade.tradeDate >= start) : trades;
+    };
+
+    const calculateFeesForSymbol = (symbol: string) => {
+      const start = getRangeStart();
+      const symbolKey = normalizeSymbol(symbol);
+      const relevant = trades.filter((trade) => normalizeSymbol(trade.symbol) === symbolKey && (!start || trade.tradeDate >= start));
+      return calculateFees(relevant, settings, null);
+    };
+
+    const buildStockAnalysis = (symbol: string, entries: RealizedEntry[]): StockAnalysis | null => {
+      const symbolKey = normalizeSymbol(symbol);
+      if (!symbolKey) return null;
+      const filteredTrades = getFilteredTrades()
+        .filter((trade) => normalizeSymbol(trade.symbol) === symbolKey)
+        .sort((a, b) => {
+          if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
+          return a.createdAt.localeCompare(b.createdAt);
+        });
+      const symbolEntries = entries.filter((entry) => normalizeSymbol(entry.symbol) === symbolKey);
+      if (!filteredTrades.length && !symbolEntries.length) return null;
+
+      const realizedPnl = symbolEntries.reduce((sum, entry) => sum + entry.pnl, 0);
+      const realizedCost = symbolEntries.reduce((sum, entry) => sum + entry.cost, 0);
+      const realizedProceeds = symbolEntries.reduce((sum, entry) => sum + entry.proceeds, 0);
+      const realizedQty = symbolEntries.reduce((sum, entry) => sum + entry.qty, 0);
+      const buyTrades = filteredTrades.filter((trade) => trade.side === 'BUY');
+      const sellTrades = filteredTrades.filter((trade) => trade.side === 'SELL');
+      const buyValue = buyTrades.reduce((sum, trade) => sum + trade.quantity * trade.price, 0);
+      const sellValue = sellTrades.reduce((sum, trade) => sum + trade.quantity * trade.price, 0);
+      const fees = calculateFeesForSymbol(symbolKey);
+      const cycle = computeCurrentCycleState(symbolKey, trades);
+      const openQty = cycle.qty > 0 ? cycle.qty : 0;
+      const avgBuy = cycle.avg ?? null;
+      const ltp = priceMap.get(symbolKey) ?? null;
+      const openCost = cycle.cost || 0;
+      const currentValue = openQty > 0 ? (ltp ?? avgBuy ?? 0) * openQty : 0;
+      const unrealizedPnl = currentValue - openCost;
+      const netPnl = realizedPnl + unrealizedPnl - fees.total;
+      const bestTrade = symbolEntries.length ? Math.max(...symbolEntries.map((entry) => entry.pnl)) : null;
+      const worstTrade = symbolEntries.length ? Math.min(...symbolEntries.map((entry) => entry.pnl)) : null;
+      const events = filteredTrades.map((trade) => ({
+        side: trade.side,
+        date: trade.tradeDate,
+        qty: trade.quantity,
+        price: trade.price,
+        value: trade.quantity * trade.price
+      }));
+
+      let insight = 'Balanced trade history.';
+      if (fees.total > Math.max(1, Math.abs(netPnl)) * 0.18) {
+        insight = 'Fees are taking a noticeable share of this stock’s result.';
+      } else if (realizedPnl < 0 && unrealizedPnl > 0) {
+        insight = 'Current holding is recovering after booked losses.';
+      } else if (realizedPnl > 0 && unrealizedPnl < 0) {
+        insight = 'Booked gains are strong, but the open position is dragging.';
+      } else if (filteredTrades.length >= 8) {
+        insight = 'High churn on this stock; review overtrading risk.';
+      } else if (netPnl >= 0) {
+        insight = 'This stock is contributing positively overall.';
+      } else {
+        insight = 'This stock is currently dragging total P&L.';
+      }
+
+      return {
+        symbol: symbolKey,
+        realizedPnl,
+        realizedCost,
+        realizedProceeds,
+        realizedQty,
+        buyValue,
+        sellValue,
+        tradeCount: filteredTrades.length,
+        buyCount: buyTrades.length,
+        sellCount: sellTrades.length,
+        fees,
+        openQty,
+        avgBuy,
+        ltp,
+        openCost,
+        currentValue,
+        unrealizedPnl,
+        netPnl,
+        bestTrade,
+        worstTrade,
+        events,
+        insight
+      };
+    };
+
+    const buildAllStockAnalyses = (entries: RealizedEntry[]) => {
+      const universe = Array.from(
+        new Set(
+          [
+            ...entries.map((entry) => normalizeSymbol(entry.symbol)),
+            ...getFilteredTrades().map((trade) => normalizeSymbol(trade.symbol))
+          ].filter(Boolean)
+        )
+      );
+      return universe
+        .map((symbol) => buildStockAnalysis(symbol as string, entries))
+        .filter((row): row is StockAnalysis => Boolean(row))
+        .sort((a, b) => Math.abs(b.netPnl) - Math.abs(a.netPnl));
     };
 
     const renderTrend = (entries: RealizedEntry[]) => {
@@ -720,40 +867,113 @@ export function renderPnlView(root: HTMLElement): void {
       trendChart = new Chart(trendCanvas, config);
     };
 
-    const renderOverview = (entries: RealizedEntry[]) => {
-      const realizedProfit = entries.filter((entry) => entry.pnl > 0).reduce((sum, entry) => sum + entry.pnl, 0);
-      const realizedLoss = entries.filter((entry) => entry.pnl < 0).reduce((sum, entry) => sum + Math.abs(entry.pnl), 0);
-      const fees = calculateFees(trades, settings, getRangeStart());
-      const netProfit = realizedProfit - realizedLoss - fees.total;
-
-      if (revenueEl) revenueEl.textContent = formatMoney(realizedProfit);
-      if (expensesEl) expensesEl.textContent = formatMoney(realizedLoss + fees.total);
-      if (netProfitEl) netProfitEl.textContent = formatMoney(netProfit);
-
-      if (overviewPieCanvas) {
-        if (overviewPieChart) overviewPieChart.destroy();
-        const config: ChartConfiguration<'doughnut', number[], string> = {
-          type: 'doughnut',
-          data: {
-            labels: ['Profit', 'Loss', 'Fees'],
-            datasets: [
-              {
-                data: [realizedProfit, realizedLoss, fees.total],
-                backgroundColor: ['#22c55e', '#ef4444', '#f59e0b'],
-                borderWidth: 2,
-                borderColor: '#ffffff'
-              }
-            ]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            cutout: '60%'
-          }
-        };
-        overviewPieChart = new Chart(overviewPieCanvas, config);
+    const renderStockFocus = (entries: RealizedEntry[]) => {
+      if (!stockSearchInput || !stockOptionsEl || !stockChipsEl || !stockSelectedEl || !stockNoteEl || !stockNetEl || !stockRibbonEl || !stockBridgeEl || !stockJourneyEl) {
+        return;
       }
+      const analyses = buildAllStockAnalyses(entries);
+      const availableSymbols = analyses.map((row) => row.symbol);
+      if (!selectedSymbol || !availableSymbols.includes(selectedSymbol)) {
+        selectedSymbol = analyses[0]?.symbol || '';
+      }
+      stockSearchInput.value = selectedSymbol || '';
+      stockOptionsEl.innerHTML = availableSymbols.map((symbol) => `<option value="${symbol}"></option>`).join('');
+
+      const quickSymbols = analyses.slice(0, 6).map((row) => row.symbol);
+      stockChipsEl.innerHTML = quickSymbols
+        .map(
+          (symbol) => `
+            <button class="btn btn-sm ${symbol === selectedSymbol ? 'btn-dark' : 'btn-outline-secondary'}" type="button" data-stock-chip="${symbol}">
+              ${symbol}
+            </button>
+          `
+        )
+        .join('');
+
+      const selected = analyses.find((row) => row.symbol === selectedSymbol);
+      if (!selected) {
+        stockSelectedEl.textContent = '--';
+        stockNetEl.textContent = '--';
+        stockNoteEl.textContent = 'No stock data available in this range.';
+        stockRibbonEl.innerHTML = '';
+        stockBridgeEl.innerHTML = '<div class="text-muted small">No stock activity to analyze.</div>';
+        stockJourneyEl.innerHTML = '';
+        return;
+      }
+
+      stockSelectedEl.textContent = selected.symbol;
+      stockNetEl.textContent = formatMoney(selected.netPnl);
+      stockNetEl.classList.toggle('text-success', selected.netPnl >= 0);
+      stockNetEl.classList.toggle('text-danger', selected.netPnl < 0);
+      stockNoteEl.textContent = selected.insight;
+
+      const ribbonItems = [
+        { label: 'Realized', value: selected.realizedPnl, tone: selected.realizedPnl >= 0 ? 'positive' : 'negative' },
+        { label: 'Unrealized', value: selected.unrealizedPnl, tone: selected.unrealizedPnl >= 0 ? 'positive' : 'negative' },
+        { label: 'Fees', value: -selected.fees.total, tone: 'negative' },
+        { label: 'Trades', value: selected.tradeCount, tone: 'neutral', raw: String(selected.tradeCount) },
+        { label: 'Open Qty', value: selected.openQty, tone: 'neutral', raw: String(selected.openQty) },
+        { label: 'Avg Buy', value: selected.avgBuy || 0, tone: 'neutral', raw: selected.avgBuy ? formatMoney(selected.avgBuy) : '--' },
+        { label: 'LTP', value: selected.ltp || 0, tone: selected.ltp && selected.avgBuy && selected.ltp >= selected.avgBuy ? 'positive' : 'neutral', raw: selected.ltp ? formatMoney(selected.ltp) : '--' },
+        { label: 'Best Exit', value: selected.bestTrade || 0, tone: (selected.bestTrade || 0) >= 0 ? 'positive' : 'negative', raw: selected.bestTrade !== null ? formatMoney(selected.bestTrade) : '--' }
+      ];
+      stockRibbonEl.innerHTML = ribbonItems
+        .map(
+          (item) => `
+            <div class="pnl-stock-ribbon-item ${item.tone}">
+              <div class="pnl-stock-ribbon-label">${item.label}</div>
+              <div class="pnl-stock-ribbon-value">${item.raw ?? formatMoney(item.value)}</div>
+            </div>
+          `
+        )
+        .join('');
+
+      const bridgeSteps = [
+        { label: 'Buy Value', value: selected.buyValue, tone: 'neutral' },
+        { label: 'Sell Value', value: selected.sellValue, tone: 'positive' },
+        { label: 'Realized', value: selected.realizedPnl, tone: selected.realizedPnl >= 0 ? 'positive' : 'negative' },
+        { label: 'Open Value', value: selected.currentValue, tone: selected.unrealizedPnl >= 0 ? 'positive' : 'neutral' },
+        { label: 'Fees', value: selected.fees.total, tone: 'negative' },
+        { label: 'Net P&L', value: selected.netPnl, tone: selected.netPnl >= 0 ? 'positive' : 'negative' }
+      ];
+      const maxBridgeValue = bridgeSteps.reduce((max, step) => Math.max(max, Math.abs(step.value)), 0) || 1;
+      stockBridgeEl.innerHTML = bridgeSteps
+        .map(
+          (step) => `
+            <div class="pnl-stock-bridge-step ${step.tone}">
+              <div class="pnl-stock-bridge-label">${step.label}</div>
+              <div class="pnl-stock-bridge-value ${step.tone === 'negative' ? 'text-danger' : step.tone === 'positive' ? 'text-success' : ''}">${formatMoney(step.value)}</div>
+              <div class="pnl-stock-bridge-bar">
+                <span style="width:${Math.max(12, (Math.abs(step.value) / maxBridgeValue) * 100)}%"></span>
+              </div>
+            </div>
+          `
+        )
+        .join('');
+
+      const journey = selected.events.slice(-8);
+      stockJourneyEl.innerHTML = journey.length
+        ? journey
+            .map(
+              (event) => `
+                <div class="pnl-stock-journey-item ${event.side === 'BUY' ? 'buy' : 'sell'}">
+                  <div class="pnl-stock-journey-dot"></div>
+                  <div class="pnl-stock-journey-date">${formatDate(event.date)}</div>
+                  <div class="pnl-stock-journey-side">${event.side}</div>
+                  <div class="pnl-stock-journey-meta">${event.qty} @ ${formatMoney(event.price)}</div>
+                </div>
+              `
+            )
+            .join('')
+        : '<div class="text-muted small">No recent events for this stock.</div>';
+
+      stockChipsEl.querySelectorAll<HTMLButtonElement>('[data-stock-chip]').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectedSymbol = button.dataset.stockChip || selectedSymbol;
+          renderStockFocus(entries);
+          renderStockBar(entries);
+        });
+      });
     };
 
     const renderMonthlyBar = (entries: RealizedEntry[]) => {
@@ -825,32 +1045,37 @@ export function renderPnlView(root: HTMLElement): void {
       stockCanvas.classList.remove('d-none');
       stockEmpty?.classList.add('d-none');
 
-      const symbolMap = new Map<string, { pnl: number; cost: number }>();
-      entries.forEach((entry) => {
-        const symbol = normalizeSymbol(entry.symbol);
-        if (!symbol) return;
-        const current = symbolMap.get(symbol) || { pnl: 0, cost: 0 };
-        current.pnl += entry.pnl;
-        current.cost += entry.cost;
-        symbolMap.set(symbol, current);
-      });
-
-      const sorted = Array.from(symbolMap.entries()).sort((a, b) => Math.abs(b[1].pnl) - Math.abs(a[1].pnl));
+      const analyses = buildAllStockAnalyses(entries);
       const limit = 12;
-      const visible = sorted.slice(0, limit);
-      const maxAbsPnl = visible.reduce((max, row) => Math.max(max, Math.abs(row[1].pnl)), 0) || 1;
-      const points = visible.map(([symbol, stats]) => {
-        const radius = 6 + (Math.abs(stats.pnl) / maxAbsPnl) * 12;
+      const visible = analyses.slice(0, limit);
+      if (selectedSymbol && !visible.some((row) => row.symbol === selectedSymbol)) {
+        const selected = analyses.find((row) => row.symbol === selectedSymbol);
+        if (selected) {
+          visible.pop();
+          visible.push(selected);
+        }
+      }
+      const maxAbsPnl = visible.reduce((max, row) => Math.max(max, Math.abs(row.netPnl)), 0) || 1;
+      const points = visible.map((stats) => {
+        const radius = 7 + (Math.abs(stats.netPnl) / maxAbsPnl) * 11;
+        const isSelected = stats.symbol === selectedSymbol;
         return {
-          x: stats.pnl,
-          y: stats.cost,
+          x: stats.netPnl,
+          y: Math.max(stats.buyValue, stats.openCost, stats.realizedCost),
           r: Number(radius.toFixed(2)),
-          label: symbol,
-          pnl: stats.pnl,
-          cost: stats.cost
+          label: stats.symbol,
+          pnl: stats.netPnl,
+          cost: Math.max(stats.buyValue, stats.openCost, stats.realizedCost),
+          selected: isSelected
         };
       });
-      const colors = points.map((point) => (point.pnl >= 0 ? '#22c55e' : '#ef4444'));
+      const colors = points.map((point) =>
+        point.selected ? 'rgba(15, 23, 42, 0.92)' : point.pnl >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.72)'
+      );
+      const borderColors = points.map((point) =>
+        point.selected ? '#0f172a' : point.pnl >= 0 ? '#22c55e' : '#ef4444'
+      );
+      const borderWidths = points.map((point) => (point.selected ? 3 : 2));
 
       const config: ChartConfiguration<'bubble', { x: number; y: number; r: number }[], string> = {
         type: 'bubble',
@@ -860,8 +1085,8 @@ export function renderPnlView(root: HTMLElement): void {
               label: 'Stock P/L',
               data: points,
               backgroundColor: colors,
-              borderColor: colors,
-              borderWidth: 2,
+              borderColor: borderColors,
+              borderWidth: borderWidths,
               hoverBorderWidth: 2
             }
           ]
@@ -878,7 +1103,7 @@ export function renderPnlView(root: HTMLElement): void {
                   const label = raw.label || context.label || '';
                   const pnl = Number(raw.pnl ?? context.parsed.x);
                   const cost = Number(raw.cost ?? context.parsed.y);
-                  return `${label} | P/L ${formatMoney(pnl)} | Invested ${formatMoney(cost)}`;
+                  return `${label} | Net ${formatMoney(pnl)} | Invested ${formatMoney(cost)}`;
                 }
               }
             }
@@ -1004,7 +1229,7 @@ export function renderPnlView(root: HTMLElement): void {
       const entries = filterEntries();
       renderKpis(entries);
       renderTrend(entries);
-      renderOverview(entries);
+      renderStockFocus(entries);
       renderMonthlyBar(entries);
       renderStockBar(entries);
       renderStats(entries);
@@ -1049,6 +1274,24 @@ export function renderPnlView(root: HTMLElement): void {
     includeUnrealizedToggle?.addEventListener('change', () => {
       includeUnrealized = Boolean(includeUnrealizedToggle?.checked);
       applyRange();
+    });
+
+    stockSearchInput?.addEventListener('change', () => {
+      const next = normalizeSymbol(stockSearchInput.value);
+      if (next) {
+        selectedSymbol = next;
+        applyRange();
+      }
+    });
+
+    stockSearchInput?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      const next = normalizeSymbol(stockSearchInput.value);
+      if (next) {
+        selectedSymbol = next;
+        applyRange();
+      }
     });
 
     root.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((btn) => {
