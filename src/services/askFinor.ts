@@ -7,12 +7,14 @@ import { listExitStrategies } from '../storage/exitStrategies';
 import { getUserSettings } from '../storage/settings';
 import { listLivePrices } from '../storage/prices';
 import { computeCurrentCycleState } from '../utils/tradeCycles';
+import { compareTradeExecutionAsc } from '../utils/tradeOrdering';
 import { normalizeSymbol } from '../utils/symbols';
 
 export type AskFinorMessage = {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  responseMs?: number;
 };
 
 type HoldingBrief = {
@@ -85,12 +87,18 @@ export type AskFinorContext = {
       price: number;
       amount: number;
     }>;
+    realizedHistory: Array<{
+      date: string;
+      symbol: string;
+      pnl: number;
+    }>;
     monthlyActivity: Array<{
       month: string;
       tradeCount: number;
       buyValue: number;
       sellValue: number;
     }>;
+    stockSummaries: TradeSymbolSummary[];
     mostTradedSymbols: TradeSymbolSummary[];
   };
   pnl: {
@@ -118,6 +126,10 @@ export type AskFinorContext = {
     }>;
     topExpenseCategories: Array<{ category: string; amount: number }>;
     topIncomeCategories: Array<{ category: string; amount: number }>;
+    thisMonthTopExpenseCategories: Array<{ category: string; amount: number }>;
+    thisMonthTopIncomeCategories: Array<{ category: string; amount: number }>;
+    monthlyExpenseCategories: Array<{ month: string; categories: Array<{ category: string; amount: number }> }>;
+    monthlyIncomeCategories: Array<{ month: string; categories: Array<{ category: string; amount: number }> }>;
     recentTransactions: Array<{
       date: string;
       type: string;
@@ -188,6 +200,7 @@ type AskFinorRequest = {
 };
 
 type RealizedEntry = {
+  date: string;
   symbol: string;
   pnl: number;
 };
@@ -220,10 +233,7 @@ function takeTop<T>(rows: T[], limit: number, sortBy: (row: T) => number): T[] {
 function buildRealizedEntries(trades: TradeRecord[]): RealizedEntry[] {
   const sorted = [...trades]
     .filter((trade) => trade.tradeDate && Number.isFinite(trade.quantity) && Number.isFinite(trade.price))
-    .sort((a, b) => {
-      if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
-      return a.createdAt.localeCompare(b.createdAt);
-    });
+    .sort(compareTradeExecutionAsc);
 
   const lotsBySymbol = new Map<string, Lot[]>();
   const realized: RealizedEntry[] = [];
@@ -286,7 +296,7 @@ function buildRealizedEntries(trades: TradeRecord[]): RealizedEntry[] {
       const matchedQty = trade.quantity - remaining;
       if (matchedQty <= 0) return;
       const pnl = matchedQty * trade.price - cost;
-      realized.push({ symbol, pnl });
+      realized.push({ date, symbol, pnl });
     });
   });
 
@@ -452,6 +462,22 @@ function buildCategoryTotals(transactions: TransactionRecord[], type: 'INCOME' |
     .slice(0, 5);
 }
 
+function buildCategoryTotalsForMonth(transactions: TransactionRecord[], type: 'INCOME' | 'EXPENSE', monthKey: string) {
+  const monthRows = transactions.filter((row) => row.type === type && toMonthKey(row.date) === monthKey);
+  return buildCategoryTotals(monthRows, type);
+}
+
+function buildMonthlyCategoryBuckets(transactions: TransactionRecord[], type: 'INCOME' | 'EXPENSE') {
+  const months = Array.from(new Set(transactions.filter((row) => row.type === type).map((row) => toMonthKey(row.date))))
+    .sort((a, b) => b.localeCompare(a))
+    .slice(0, 8);
+
+  return months.map((month) => ({
+    month,
+    categories: buildCategoryTotalsForMonth(transactions, type, month)
+  }));
+}
+
 function buildExitStrategySummary(rows: ExitStrategyScenario[]) {
   const byMode = new Map<string, number>();
   rows.forEach((row) => {
@@ -515,6 +541,7 @@ export async function buildAskFinorContext(userId: string, name: string): Promis
     .sort((a, b) => a.netPnl - b.netPnl)
     .slice(0, 5)
     .map((row) => ({ symbol: row.symbol, netPnl: row.netPnl }));
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -547,7 +574,7 @@ export async function buildAskFinorContext(userId: string, name: string): Promis
       sellTrades: trades.filter((trade) => trade.side === 'SELL').length,
       firstTradeDate: trades.length ? trades[trades.length - 1].tradeDate : null,
       lastTradeDate: trades.length ? trades[0].tradeDate : null,
-      recentTrades: trades.slice(0, 10).map((trade) => ({
+      recentTrades: trades.slice(0, 180).map((trade) => ({
         date: trade.tradeDate,
         symbol: normalizeSymbol(trade.symbol),
         side: trade.side,
@@ -555,7 +582,13 @@ export async function buildAskFinorContext(userId: string, name: string): Promis
         price: trade.price,
         amount: trade.quantity * trade.price
       })),
+      realizedHistory: realizedEntries.slice(-240).map((entry) => ({
+        date: entry.date,
+        symbol: entry.symbol,
+        pnl: entry.pnl
+      })),
       monthlyActivity: buildMonthlyTradeActivity(trades),
+      stockSummaries: tradeSymbolSummary,
       mostTradedSymbols: tradeSymbolSummary.slice(0, 10)
     },
     pnl: {
@@ -584,7 +617,11 @@ export async function buildAskFinorContext(userId: string, name: string): Promis
       monthlyFlow: buildMonthlyTransactionFlow(transactions),
       topExpenseCategories: buildCategoryTotals(transactions, 'EXPENSE'),
       topIncomeCategories: buildCategoryTotals(transactions, 'INCOME'),
-      recentTransactions: transactions.slice(0, 10).map((row) => ({
+      thisMonthTopExpenseCategories: buildCategoryTotalsForMonth(transactions, 'EXPENSE', currentMonthKey),
+      thisMonthTopIncomeCategories: buildCategoryTotalsForMonth(transactions, 'INCOME', currentMonthKey),
+      monthlyExpenseCategories: buildMonthlyCategoryBuckets(transactions, 'EXPENSE'),
+      monthlyIncomeCategories: buildMonthlyCategoryBuckets(transactions, 'INCOME'),
+      recentTransactions: transactions.slice(0, 120).map((row) => ({
         date: row.date,
         type: row.type,
         category: row.category,

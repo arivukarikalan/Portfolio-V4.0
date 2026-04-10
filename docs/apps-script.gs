@@ -170,7 +170,8 @@ function handleAskFinor(body) {
   if (!question) return { ok: false, message: 'Question is required' };
 
   const context = body.context && typeof body.context === 'object' ? body.context : {};
-  const deterministicAnswer = buildDeterministicAskFinorAnswer(question, context);
+  const conversation = Array.isArray(body.conversation) ? body.conversation : [];
+  const deterministicAnswer = buildDeterministicAskFinorAnswer(question, context, conversation);
   if (deterministicAnswer) {
     return {
       ok: true,
@@ -181,7 +182,6 @@ function handleAskFinor(body) {
     };
   }
 
-  const conversation = Array.isArray(body.conversation) ? body.conversation : [];
   const transcript = conversation
     .slice(-6)
     .map(function (message) {
@@ -352,14 +352,776 @@ function findHoldingFromQuestion(question, context) {
   return null;
 }
 
-function buildDeterministicAskFinorAnswer(question, context) {
-  const text = String(question || '').trim().toLowerCase();
-  const holding = findHoldingFromQuestion(question, context);
+function findHoldingFromConversation(conversation, context) {
+  if (!Array.isArray(conversation) || !conversation.length) return null;
+  for (var i = conversation.length - 1; i >= 0; i -= 1) {
+    var message = conversation[i];
+    var content = String(message && message.content ? message.content : '').trim();
+    if (!content) continue;
+    var holding = findHoldingFromQuestion(content, context);
+    if (holding) return holding;
+  }
+  return null;
+}
+
+function getContextHoldings(context) {
+  return context && context.portfolio && Array.isArray(context.portfolio.holdings) ? context.portfolio.holdings : [];
+}
+
+function formatHoldingDetail(holding, context) {
+  return (
+    holding.symbol +
+    ' holding summary: quantity ' +
+    Number(holding.qty || 0) +
+    ', average buy ' +
+    formatInr(holding.avgBuy) +
+    ', LTP ' +
+    formatInr(holding.ltp) +
+    ', invested ' +
+    formatInr(holding.invested) +
+    ', current value ' +
+    formatInr(holding.currentValue) +
+    ', unrealized P&L ' +
+    formatInr(holding.unrealizedPnl) +
+    ' (' +
+    formatPctNumber(holding.unrealizedPnlPct) +
+    '). Target sell price is ' +
+    formatInr(holding.targetSellPrice) +
+    ' and break-even sell price is ' +
+    formatInr(holding.breakEvenSellPrice) +
+    '.'
+  );
+}
+
+function extractPercentThreshold(text) {
+  var patterns = [
+    /(?:above|more than|greater than|over)\s*(-?\d+(?:\.\d+)?)\s*%/,
+    /(?:below|less than|under)\s*(-?\d+(?:\.\d+)?)\s*%/,
+    /(-?\d+(?:\.\d+)?)\s*%\s*(?:return|profit|gain|loss)/
+  ];
+  for (var i = 0; i < patterns.length; i += 1) {
+    var match = text.match(patterns[i]);
+    if (match) {
+      var parsed = Number(match[1]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function buildHoldingsListAnswer(context, includeDetails) {
+  var holdings = getContextHoldings(context);
+  if (!holdings.length) {
+    return 'You do not have any current holdings in the app right now.';
+  }
+  var sorted = holdings.slice().sort(function (a, b) {
+    return Number(b.currentValue || 0) - Number(a.currentValue || 0);
+  });
+  if (includeDetails) {
+    return (
+      'Your current holdings are: ' +
+      sorted
+        .map(function (holding) {
+          return (
+            holding.symbol +
+            ' (' +
+            Number(holding.qty || 0) +
+            ' qty, ' +
+            formatPctNumber(holding.unrealizedPnlPct) +
+            ')'
+          );
+        })
+        .join(', ') +
+      '.'
+    );
+  }
+  return 'Your current holding symbols are: ' + sorted.map(function (holding) { return holding.symbol; }).join(', ') + '.';
+}
+
+function buildFilteredHoldingsAnswer(context, mode, threshold) {
+  var holdings = getContextHoldings(context);
+  if (!holdings.length) {
+    return 'You do not have any current holdings in the app right now.';
+  }
+
+  var filtered = holdings.filter(function (holding) {
+    var pct = Number(holding.unrealizedPnlPct || 0);
+    if (mode === 'profit') return pct > 0;
+    if (mode === 'loss') return pct < 0;
+    if (mode === 'above') return pct > Number(threshold || 0);
+    if (mode === 'below') return pct < Number(threshold || 0);
+    return false;
+  });
+
+  filtered.sort(function (a, b) {
+    return Number(b.unrealizedPnlPct || 0) - Number(a.unrealizedPnlPct || 0);
+  });
+
+  if (!filtered.length) {
+    if (mode === 'profit') return 'None of your current holdings are in profit right now.';
+    if (mode === 'loss') return 'None of your current holdings are in loss right now.';
+    if (mode === 'above') return 'No current holdings are above ' + formatPctNumber(threshold).replace('+', '') + '.';
+    if (mode === 'below') return 'No current holdings are below ' + formatPctNumber(threshold) + '.';
+  }
+
+  if (mode === 'profit') {
+    return (
+      'Current holdings in profit: ' +
+      filtered
+        .map(function (holding) {
+          return holding.symbol + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ', ' + formatInr(holding.unrealizedPnl) + ')';
+        })
+        .join(', ') +
+      '.'
+    );
+  }
+
+  if (mode === 'loss') {
+    return (
+      'Current holdings in loss: ' +
+      filtered
+        .map(function (holding) {
+          return holding.symbol + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ', ' + formatInr(holding.unrealizedPnl) + ')';
+        })
+        .join(', ') +
+      '.'
+    );
+  }
+
+  if (mode === 'above') {
+    return (
+      'Current holdings above ' +
+      formatPctNumber(threshold).replace('+', '') +
+      ': ' +
+      filtered
+        .map(function (holding) {
+          return holding.symbol + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ', ' + formatInr(holding.unrealizedPnl) + ')';
+        })
+        .join(', ') +
+      '.'
+    );
+  }
+
+  return (
+    'Current holdings below ' +
+    formatPctNumber(threshold) +
+    ': ' +
+    filtered
+      .map(function (holding) {
+        return holding.symbol + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ', ' + formatInr(holding.unrealizedPnl) + ')';
+      })
+      .join(', ') +
+    '.'
+  );
+}
+
+function getTradeContext(context) {
+  return context && context.trades ? context.trades : {};
+}
+
+function getFinanceContext(context) {
+  return context && context.finance ? context.finance : {};
+}
+
+function getTradeSummaries(context) {
+  var trades = getTradeContext(context);
+  return Array.isArray(trades.stockSummaries) ? trades.stockSummaries : Array.isArray(trades.mostTradedSymbols) ? trades.mostTradedSymbols : [];
+}
+
+function findTradeSummaryFromQuestion(question, context) {
+  var summaries = getTradeSummaries(context);
+  var upper = String(question || '').toUpperCase();
+  for (var i = 0; i < summaries.length; i += 1) {
+    var summary = summaries[i];
+    var symbol = normalizeSymbol(summary && summary.symbol);
+    if (!symbol) continue;
+    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
+    if (pattern.test(upper)) return summary;
+  }
+  return null;
+}
+
+function findTradeSummaryFromConversation(conversation, context) {
+  if (!Array.isArray(conversation) || !conversation.length) return null;
+  for (var i = conversation.length - 1; i >= 0; i -= 1) {
+    var message = conversation[i];
+    var content = String(message && message.content ? message.content : '').trim();
+    if (!content) continue;
+    var summary = findTradeSummaryFromQuestion(content, context);
+    if (summary) return summary;
+  }
+  return null;
+}
+
+function buildMostTradedAnswer(context) {
+  var top = getTradeSummaries(context);
+  if (!top.length) return 'I do not see enough trade data to determine your most traded stock yet.';
+  var first = top[0];
+  return (
+    'Your most traded stock is ' +
+    first.symbol +
+    ' with ' +
+    Number(first.tradeCount || 0) +
+    ' trades. Buy trades: ' +
+    Number(first.buyCount || 0) +
+    ', sell trades: ' +
+    Number(first.sellCount || 0) +
+    ', net P&L: ' +
+    formatInr(first.netPnl) +
+    '.'
+  );
+}
+
+function buildTopPnlAnswer(context, mode) {
+  var source =
+    mode === 'winner'
+      ? context && context.pnl && Array.isArray(context.pnl.topNetWinners) ? context.pnl.topNetWinners : []
+      : context && context.pnl && Array.isArray(context.pnl.topNetLosers) ? context.pnl.topNetLosers : [];
+  if (!source.length) {
+    return mode === 'winner'
+      ? 'I do not see any net winners in the current app summary.'
+      : 'I do not see any net losers in the current app summary.';
+  }
+  return (
+    (mode === 'winner' ? 'Top net winners: ' : 'Top net losers: ') +
+    source
+      .slice(0, 5)
+      .map(function (row) {
+        return row.symbol + ' (' + formatInr(row.netPnl) + ')';
+      })
+      .join(', ') +
+    '.'
+  );
+}
+
+function buildRecentTradesAnswer(summary, context) {
+  var trades = getTradeContext(context);
+  var recentTrades = Array.isArray(trades.recentTrades) ? trades.recentTrades : [];
+  var symbol = normalizeSymbol(summary && summary.symbol);
+  var filtered = recentTrades.filter(function (row) {
+    return normalizeSymbol(row && row.symbol) === symbol;
+  });
+
+  if (!filtered.length) {
+    return (
+      'I do not see recent trade rows for ' +
+      symbol +
+      ' in the current Ask Finor summary. Trade summary available: ' +
+      Number(summary.tradeCount || 0) +
+      ' trades, buy quantity ' +
+      Number(summary.buyQty || 0) +
+      ', sell quantity ' +
+      Number(summary.sellQty || 0) +
+      ', net P&L ' +
+      formatInr(summary.netPnl) +
+      '.'
+    );
+  }
+
+  return (
+    'Recent trades for ' +
+    symbol +
+    ': ' +
+    filtered
+      .slice(0, 5)
+      .map(function (row) {
+        return row.date + ' ' + row.side + ' ' + Number(row.quantity || 0) + ' @ ' + formatInr(row.price);
+      })
+      .join(', ') +
+    '.'
+  );
+}
+
+function buildTradeSummaryAnswer(summary) {
+  return (
+    summary.symbol +
+    ' trade summary: total trades ' +
+    Number(summary.tradeCount || 0) +
+    ', buy trades ' +
+    Number(summary.buyCount || 0) +
+    ', sell trades ' +
+    Number(summary.sellCount || 0) +
+    ', buy quantity ' +
+    Number(summary.buyQty || 0) +
+    ', sell quantity ' +
+    Number(summary.sellQty || 0) +
+    ', realized P&L ' +
+    formatInr(summary.realizedPnl) +
+    ', unrealized P&L ' +
+    formatInr(summary.unrealizedPnl) +
+    ', net P&L ' +
+    formatInr(summary.netPnl) +
+    '.'
+  );
+}
+
+function buildExpenseCategoryAnswer(context, currentMonthOnly) {
+  var finance = getFinanceContext(context);
+  var list = currentMonthOnly
+    ? Array.isArray(finance.thisMonthTopExpenseCategories) ? finance.thisMonthTopExpenseCategories : []
+    : Array.isArray(finance.topExpenseCategories) ? finance.topExpenseCategories : [];
+  if (!list.length) {
+    return currentMonthOnly
+      ? 'I do not see any expense categories recorded for this month.'
+      : 'I do not see any expense category data in the current app summary.';
+  }
+  var first = list[0];
+  return (
+    (currentMonthOnly ? 'Your biggest expense category this month is ' : 'Your biggest expense category is ') +
+    first.category +
+    ' at ' +
+    formatInr(first.amount) +
+    '.'
+  );
+}
+
+function getRealizedHistory(context) {
+  var trades = getTradeContext(context);
+  return Array.isArray(trades.realizedHistory) ? trades.realizedHistory : [];
+}
+
+function extractSellPrice(text) {
+  var match = text.match(/(?:sell(?:ed)?\s+at|sold\s+at|at)\s*₹?\s*(\d+(?:\.\d+)?)/i);
+  if (!match) return null;
+  var parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveSellPriceFromQuestion(text, holding) {
+  var explicit = extractSellPrice(text);
+  if (Number.isFinite(explicit)) return explicit;
   if (!holding) return null;
+  if (/target price|target sell price/.test(text)) {
+    var target = Number(holding.targetSellPrice || 0);
+    return Number.isFinite(target) && target > 0 ? target : null;
+  }
+  if (/break.?even/.test(text)) {
+    var breakEven = Number(holding.breakEvenSellPrice || 0);
+    return Number.isFinite(breakEven) && breakEven > 0 ? breakEven : null;
+  }
+  return null;
+}
+
+function buildWhatIfSellAnswer(holding, context, sellPrice) {
+  var qty = Number(holding.qty || 0);
+  var sellRate = Number(context && context.settings ? context.settings.sellBrokeragePct || 0 : 0);
+  var dpCharge = Number(context && context.settings ? context.settings.dpCharge || 0 : 0);
+  var effectiveInvested = Number(holding.effectiveInvested || holding.invested || 0);
+  var grossValue = qty * sellPrice;
+  var netValue = grossValue * (1 - sellRate / 100) - dpCharge;
+  var profit = netValue - effectiveInvested;
+  return (
+    'If you sell ' +
+    holding.symbol +
+    ' at ' +
+    formatInr(sellPrice) +
+    ' per share for ' +
+    qty +
+    ' shares, your estimated net result after configured sell charges would be ' +
+    formatInr(profit) +
+    '. Gross sell value would be ' +
+    formatInr(grossValue) +
+    ' and estimated net sell value would be ' +
+    formatInr(netValue) +
+    '.'
+  );
+}
+
+function buildProfitLossAnalysisAnswer(context, periodLabel, fromDate, toDate) {
+  var realized = getRealizedHistory(context).filter(function (entry) {
+    var date = String(entry && entry.date || '');
+    return date >= fromDate && (!toDate || date <= toDate);
+  });
+  if (!realized.length) {
+    return 'I do not see any booked profit or loss entries for ' + periodLabel + '.';
+  }
+  var profit = 0;
+  var loss = 0;
+  realized.forEach(function (entry) {
+    var pnl = Number(entry && entry.pnl || 0);
+    if (pnl > 0) profit += pnl;
+    if (pnl < 0) loss += Math.abs(pnl);
+  });
+  return (
+    'Your booked profit/loss for ' +
+    periodLabel +
+    ': profit ' +
+    formatInr(profit) +
+    ', loss ' +
+    formatInr(loss) +
+    ', net ' +
+    formatInr(profit - loss) +
+    '.'
+  );
+}
+
+function buildGreetingAnswer(text) {
+  if (/^(hi|hello|hey|hii|helo)\b/.test(text)) {
+    return 'Hi. Ask me about your holdings, trades, profit and loss, expenses, or targets, and I will answer from your Finance App data.';
+  }
+  if (/(^|\b)(thank you|thanks|thx)\b/.test(text)) {
+    return 'You are welcome. Ask anything else about your Finance App data whenever you want.';
+  }
+  if (/(^|\b)(bye|goodbye|see you|ok bye)\b/.test(text)) {
+    return 'Bye. Come back anytime if you want another summary from your Finance App data.';
+  }
+  return null;
+}
+
+function findAllHoldingsFromQuestion(question, context) {
+  var holdings = getContextHoldings(context);
+  var upper = String(question || '').toUpperCase();
+  var matches = [];
+  for (var i = 0; i < holdings.length; i += 1) {
+    var holding = holdings[i];
+    var symbol = normalizeSymbol(holding && holding.symbol);
+    if (!symbol) continue;
+    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
+    if (pattern.test(upper)) matches.push(holding);
+  }
+  return matches;
+}
+
+function buildHoldingComparisonAnswer(holdings) {
+  if (!holdings || holdings.length < 2) return null;
+  var first = holdings[0];
+  var second = holdings[1];
+  return (
+    first.symbol +
+    ': qty ' +
+    Number(first.qty || 0) +
+    ', avg buy ' +
+    formatInr(first.avgBuy) +
+    ', current value ' +
+    formatInr(first.currentValue) +
+    ', unrealized P&L ' +
+    formatInr(first.unrealizedPnl) +
+    ' (' +
+    formatPctNumber(first.unrealizedPnlPct) +
+    '). ' +
+    second.symbol +
+    ': qty ' +
+    Number(second.qty || 0) +
+    ', avg buy ' +
+    formatInr(second.avgBuy) +
+    ', current value ' +
+    formatInr(second.currentValue) +
+    ', unrealized P&L ' +
+    formatInr(second.unrealizedPnl) +
+    ' (' +
+    formatPctNumber(second.unrealizedPnlPct) +
+    ').'
+  );
+}
+
+function startOfTodayIso() {
+  var now = new Date();
+  var start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return start.toISOString().slice(0, 10);
+}
+
+function isoDateOnly(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString().slice(0, 10);
+}
+
+function shiftDate(date, days) {
+  var next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function monthWindow(year, monthIndex) {
+  return {
+    fromDate: isoDateOnly(new Date(year, monthIndex, 1)),
+    toDate: isoDateOnly(new Date(year, monthIndex + 1, 0)),
+    monthKey: year + '-' + String(monthIndex + 1).padStart(2, '0')
+  };
+}
+
+function detectMonthIndex(text) {
+  var names = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  for (var i = 0; i < names.length; i += 1) {
+    if (new RegExp('(?:in|for)\\s+' + names[i] + '(?:\\b|\\s+month)').test(text)) {
+      return i;
+    }
+  }
+  return null;
+}
+
+function buildDateWindowFromText(text) {
+  var now = new Date();
+  if (/last 30 days/.test(text)) {
+    return {
+      label: 'the last 30 days',
+      fromDate: isoDateOnly(shiftDate(now, -29)),
+      toDate: isoDateOnly(now),
+      monthKey: null
+    };
+  }
+
+  if (/this month/.test(text)) {
+    var current = monthWindow(now.getFullYear(), now.getMonth());
+    return {
+      label: 'this month',
+      fromDate: current.fromDate,
+      toDate: current.toDate,
+      monthKey: current.monthKey
+    };
+  }
+
+  if (/last month/.test(text)) {
+    var lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    var previous = monthWindow(lastMonth.getFullYear(), lastMonth.getMonth());
+    return {
+      label: 'last month',
+      fromDate: previous.fromDate,
+      toDate: previous.toDate,
+      monthKey: previous.monthKey
+    };
+  }
+
+  var monthIndex = detectMonthIndex(text);
+  if (monthIndex !== null) {
+    var year = now.getFullYear();
+    if (monthIndex > now.getMonth()) year -= 1;
+    var named = monthWindow(year, monthIndex);
+    var label = named.monthKey === String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0')
+      ? 'this month'
+      : new Date(year, monthIndex, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    return {
+      label: label,
+      fromDate: named.fromDate,
+      toDate: named.toDate,
+      monthKey: named.monthKey
+    };
+  }
+
+  return null;
+}
+
+function filterRowsByDateWindow(rows, getDate, window) {
+  return rows.filter(function (row) {
+    var date = String(getDate(row) || '');
+    return !!date && date >= window.fromDate && date <= window.toDate;
+  });
+}
+
+function buildRealizedPeriodAnswer(context, periodLabel, fromDate, mode, toDate) {
+  var realized = getRealizedHistory(context).filter(function (entry) {
+    var date = String(entry && entry.date || '');
+    return date >= fromDate && (!toDate || date <= toDate);
+  });
+  if (!realized.length) {
+    return 'I do not see any booked ' + (mode === 'loss' ? 'loss' : 'profit') + ' entries for ' + periodLabel + '.';
+  }
+  var total = realized.reduce(function (sum, entry) {
+    var pnl = Number(entry && entry.pnl || 0);
+    if (mode === 'loss') return sum + (pnl < 0 ? Math.abs(pnl) : 0);
+    return sum + (pnl > 0 ? pnl : 0);
+  }, 0);
+  return (
+    'Your booked ' +
+    (mode === 'loss' ? 'loss' : 'profit') +
+    ' for ' +
+    periodLabel +
+    ' is ' +
+    formatInr(total) +
+    '.'
+  );
+}
+
+function buildExpenseCategoryForWindow(context, window) {
+  var finance = getFinanceContext(context);
+  var monthlyCategories = Array.isArray(finance.monthlyExpenseCategories) ? finance.monthlyExpenseCategories : [];
+  if (window.monthKey) {
+    for (var i = 0; i < monthlyCategories.length; i += 1) {
+      if (String(monthlyCategories[i] && monthlyCategories[i].month || '') !== window.monthKey) continue;
+      var categories = Array.isArray(monthlyCategories[i].categories) ? monthlyCategories[i].categories : [];
+      if (!categories.length) {
+        return 'I do not see any expense categories recorded for ' + window.label + '.';
+      }
+      return 'Your biggest expense category for ' + window.label + ' is ' + categories[0].category + ' at ' + formatInr(categories[0].amount) + '.';
+    }
+  }
+
+  var recentTransactions = Array.isArray(finance.recentTransactions) ? finance.recentTransactions : [];
+  var expenses = filterRowsByDateWindow(recentTransactions, function (row) { return row && row.date; }, window).filter(function (row) {
+    return String(row && row.type || '').toUpperCase() === 'EXPENSE';
+  });
+
+  if (!expenses.length) {
+    return 'I do not see any expense categories recorded for ' + window.label + '.';
+  }
+
+  var totals = {};
+  expenses.forEach(function (row) {
+    var category = String(row && row.category || 'Other').trim() || 'Other';
+    totals[category] = (totals[category] || 0) + Number(row && row.amount || 0);
+  });
+
+  var topCategory = null;
+  var topAmount = 0;
+  for (var key in totals) {
+    if (totals[key] > topAmount) {
+      topCategory = key;
+      topAmount = totals[key];
+    }
+  }
+
+  return topCategory
+    ? 'Your biggest expense category for ' + window.label + ' is ' + topCategory + ' at ' + formatInr(topAmount) + '.'
+    : 'I do not see any expense categories recorded for ' + window.label + '.';
+}
+
+function buildDeterministicAskFinorAnswer(question, context, conversation) {
+  const text = String(question || '').trim().toLowerCase();
+  const greetingAnswer = buildGreetingAnswer(text);
+  if (greetingAnswer) return greetingAnswer;
+  const dateWindow = buildDateWindowFromText(text);
+  const explicitHolding = findHoldingFromQuestion(question, context);
+  const holding = explicitHolding || findHoldingFromConversation(conversation, context);
+  const tradeSummary = findTradeSummaryFromQuestion(question, context) || findTradeSummaryFromConversation(conversation, context);
+  const comparisonHoldings = findAllHoldingsFromQuestion(question, context);
+  const askHoldingsList =
+    /(all stock names|all holdings|current holdings|current holding stocks list|list holdings|holding names|holding list|which stocks do i have)/.test(text);
+  const askNamesOnly = /(stock names|holding names|list of stocks|symbol names)/.test(text);
+  const askProfitHoldings =
+    /(holdings.*profit|stocks.*profit|which.*in profit|profit holdings|stocks that.*profit)/.test(text);
+  const askLossHoldings =
+    /(holdings.*loss|stocks.*loss|which.*in loss|loss holdings|stocks that.*loss)/.test(text);
+  const threshold = extractPercentThreshold(text);
+  const askAboveThreshold =
+    threshold !== null &&
+    /(holding|holdings|stock|stocks|return|profit|gain)/.test(text) &&
+    /(?:above|more than|greater than|over)/.test(text);
+  const askBelowThreshold =
+    threshold !== null &&
+    /(holding|holdings|stock|stocks|return|profit|gain|loss)/.test(text) &&
+    /(?:below|less than|under)/.test(text);
+
+  if (askHoldingsList) {
+    return buildHoldingsListAnswer(context, !askNamesOnly);
+  }
+
+  if (askAboveThreshold) {
+    return buildFilteredHoldingsAnswer(context, 'above', threshold);
+  }
+
+  if (askBelowThreshold) {
+    return buildFilteredHoldingsAnswer(context, 'below', threshold);
+  }
+
+  if (askProfitHoldings) {
+    return buildFilteredHoldingsAnswer(context, 'profit', null);
+  }
+
+  if (askLossHoldings) {
+    return buildFilteredHoldingsAnswer(context, 'loss', null);
+  }
+
+  const askMostTraded = /(most traded stock|most traded symbol|which stock did i trade most|top traded stock)/.test(text);
+  const askTopWinners = /(top winners|top winner|best performers|best performing stocks|top gainers)/.test(text);
+  const askTopLosers = /(top losers|top loser|worst performers|worst performing stocks|top loss makers|top lossmakers|top \d+ losses|top losses)/.test(text);
+  const askBiggestExpenseThisMonth =
+    /(biggest expense category this month|highest expense category this month|top expense category this month)/.test(text);
+  const askBiggestExpense =
+    !askBiggestExpenseThisMonth && /(biggest expense category|highest expense category|top expense category)/.test(text);
+  const askComparison = /(vs|compare|comparison)/.test(text) && comparisonHoldings.length >= 2;
+  const sellPrice = resolveSellPriceFromQuestion(text, holding);
+  const askWhatIfSell = sellPrice !== null && /(if i sell|if sold|sell at|sold at|profit i will get|how much profit)/.test(text);
+  const askProfitToday = /(profit today|today profit|booked profit today|how much profit today)/.test(text);
+  const askLossBookedLast3Months = /(loss i booked in last 3 months|booked loss in last 3 months|loss booked last 3 months)/.test(text);
+  const askProfitLossAnalysis =
+    (dateWindow !== null && /(profit\s*\/\s*loss|profit and loss|p&l|analysis)/.test(text) && !explicitHolding) ||
+    /(last 3 month profit\s*\/\s*loss analysis|last 3 months profit\s*\/\s*loss analysis)/.test(text);
+  const askBookedProfitWithWindow =
+    dateWindow !== null &&
+    /(booked profit|realized profit|profit booked|how much profit|profit for|profit in|this month profit|last month profit|last 30 days profit)/.test(text) &&
+    !askWhatIfSell &&
+    !explicitHolding;
+  const askBookedLossWithWindow =
+    dateWindow !== null &&
+    /(booked loss|realized loss|loss booked|how much loss|loss for|loss in|this month loss|last month loss|last 30 days loss)/.test(text) &&
+    !explicitHolding;
+
+  if (askMostTraded) {
+    return buildMostTradedAnswer(context);
+  }
+
+  if (askTopWinners) {
+    return buildTopPnlAnswer(context, 'winner');
+  }
+
+  if (askTopLosers) {
+    return buildTopPnlAnswer(context, 'loser');
+  }
+
+  if (dateWindow && askBiggestExpense) {
+    return buildExpenseCategoryForWindow(context, dateWindow);
+  }
+
+  if (askBiggestExpenseThisMonth) {
+    return buildExpenseCategoryAnswer(context, true);
+  }
+
+  if (askBiggestExpense) {
+    return buildExpenseCategoryAnswer(context, false);
+  }
+
+  if (askComparison) {
+    return buildHoldingComparisonAnswer(comparisonHoldings);
+  }
+
+  if (askProfitLossAnalysis) {
+    if (dateWindow) {
+      return buildProfitLossAnalysisAnswer(context, dateWindow.label, dateWindow.fromDate, dateWindow.toDate);
+    }
+    var analysisFromDate = new Date();
+    analysisFromDate.setMonth(analysisFromDate.getMonth() - 3);
+    return buildProfitLossAnalysisAnswer(context, 'the last 3 months', analysisFromDate.toISOString().slice(0, 10), null);
+  }
+
+  if (askBookedProfitWithWindow) {
+    return buildRealizedPeriodAnswer(context, dateWindow.label, dateWindow.fromDate, 'profit', dateWindow.toDate);
+  }
+
+  if (askBookedLossWithWindow) {
+    return buildRealizedPeriodAnswer(context, dateWindow.label, dateWindow.fromDate, 'loss', dateWindow.toDate);
+  }
+
+  if (askProfitToday) {
+    return buildRealizedPeriodAnswer(context, 'today', startOfTodayIso(), 'profit');
+  }
+
+  if (askLossBookedLast3Months) {
+    var fromDate = new Date();
+    fromDate.setMonth(fromDate.getMonth() - 3);
+    return buildRealizedPeriodAnswer(context, 'the last 3 months', fromDate.toISOString().slice(0, 10), 'loss');
+  }
 
   const askTarget = /(target price|target sell price|sell price|exit price)/.test(text);
   const askBreakEven = /(break even|breakeven)/.test(text);
-  const askHoldingSummary = /(holding|position|qty|quantity|avg buy|ltp|current value|profit|loss|p&l|pnl)/.test(text);
+  const askAveragePrice = /(average price|avg price|average buy|avg buy|buy average)/.test(text);
+  const askQuantityOnly = /(how much quantity|quantity|qty|shares|share count|units)/.test(text);
+  const askRecentTrades = /(recent trades|last trades|latest trades|recent activity|trade history)/.test(text);
+  const askHoldingSummary =
+    /(holding|position|ltp|current value|profit|loss|p&l|pnl|stock details|full stock details|details about|details for|active holding|trade details|summary data|stock summary|full details|same like)/.test(
+      text
+    );
+
+  if (askRecentTrades && tradeSummary) {
+    return buildRecentTradesAnswer(tradeSummary, context);
+  }
+
+  if (tradeSummary && /(trade summary|stock summary|trading summary|summary for|details for)/.test(text) && !holding) {
+    return buildTradeSummaryAnswer(tradeSummary);
+  }
+
+  if (!holding) return null;
+
+  if (askWhatIfSell) {
+    return buildWhatIfSellAnswer(holding, context, sellPrice);
+  }
 
   if (askTarget && holding.targetSellPrice) {
     return (
@@ -387,29 +1149,30 @@ function buildDeterministicAskFinorAnswer(question, context) {
     );
   }
 
-  if (askHoldingSummary) {
+  if (askAveragePrice) {
+    return holding.symbol + ' average buy price is ' + formatInr(holding.avgBuy) + ' per share for your current open holding.';
+  }
+
+  if (askQuantityOnly) {
     return (
-      holding.symbol +
-      ' holding summary: quantity ' +
+      'You currently hold ' +
       Number(holding.qty || 0) +
-      ', average buy ' +
+      ' shares of ' +
+      holding.symbol +
+      '. Average buy price is ' +
       formatInr(holding.avgBuy) +
-      ', LTP ' +
-      formatInr(holding.ltp) +
-      ', invested ' +
-      formatInr(holding.invested) +
-      ', current value ' +
+      ' and current value is ' +
       formatInr(holding.currentValue) +
-      ', unrealized P&L ' +
-      formatInr(holding.unrealizedPnl) +
-      ' (' +
-      formatPctNumber(holding.unrealizedPnlPct) +
-      '). Target sell price is ' +
-      formatInr(holding.targetSellPrice) +
-      ' and break-even sell price is ' +
-      formatInr(holding.breakEvenSellPrice) +
       '.'
     );
+  }
+
+  if (askHoldingSummary) {
+    return formatHoldingDetail(holding, context);
+  }
+
+  if (tradeSummary && /(trade summary|stock summary|trading summary|summary for|details for)/.test(text)) {
+    return buildTradeSummaryAnswer(tradeSummary);
   }
 
   return null;

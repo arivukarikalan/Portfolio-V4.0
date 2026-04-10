@@ -1,5 +1,6 @@
 import type { TradeRecord } from '../core/types';
 import { normalizeSymbol } from './symbols';
+import { compareTradeExecutionAsc } from './tradeOrdering';
 
 export function computeCurrentCycleState(
   symbol: string,
@@ -22,10 +23,7 @@ export function computeCurrentCycleLots(
   if (!normalized) return [];
   const relevant = trades
     .filter((trade) => trade.id !== ignoreId && normalizeSymbol(trade.symbol) === normalized)
-    .sort((a, b) => {
-      if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
-      return a.createdAt.localeCompare(b.createdAt);
-    });
+    .sort(compareTradeExecutionAsc);
 
   const lots: Array<{ qty: number; price: number; date: string | null }> = [];
 
@@ -66,7 +64,7 @@ export function computeCurrentCycleLots(
   dates.forEach((date) => {
     const entry = grouped.get(date);
     if (!entry) return;
-    entry.buys.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    entry.buys.sort(compareTradeExecutionAsc);
     entry.buys.forEach((buy) => {
       lots.push({
         qty: buy.quantity,

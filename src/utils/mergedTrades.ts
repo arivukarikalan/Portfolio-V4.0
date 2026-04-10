@@ -1,5 +1,6 @@
 import type { TradeRecord, TradeSide } from '../core/types';
 import { normalizeSymbol } from './symbols';
+import { compareTradeExecutionAsc } from './tradeOrdering';
 
 export type MergedTrade = {
   id: string;
@@ -18,10 +19,7 @@ export type MergedTrade = {
 };
 
 function sortTrades(trades: TradeRecord[]): TradeRecord[] {
-  return [...trades].sort((a, b) => {
-    if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
-    return a.createdAt.localeCompare(b.createdAt);
-  });
+  return [...trades].sort(compareTradeExecutionAsc);
 }
 
 export function mergeImportedTrades(trades: TradeRecord[]): MergedTrade[] {

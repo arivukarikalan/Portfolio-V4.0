@@ -1,5 +1,6 @@
 import { TRADES_STORE } from '../core/constants';
 import type { TradeRecord, TradeSide } from '../core/types';
+import { compareTradeExecutionDesc } from '../utils/tradeOrdering';
 import { openFinanceDb } from './db';
 
 export type TradeInput = {
@@ -9,6 +10,7 @@ export type TradeInput = {
   quantity: number;
   price: number;
   tradeDate: string;
+  executionAt?: string;
   importId?: string;
   exitPrice?: number | null;
   notes?: string;
@@ -19,7 +21,7 @@ export async function listTrades(userId: string): Promise<TradeRecord[]> {
   const all = await db.getAll(TRADES_STORE);
   return all
     .filter((trade) => trade.userId === userId)
-    .sort((a, b) => b.tradeDate.localeCompare(a.tradeDate));
+    .sort(compareTradeExecutionDesc);
 }
 
 export async function addTrade(input: TradeInput): Promise<TradeRecord> {

@@ -1,5 +1,5 @@
 import { renderShell, bindShell } from '../ui/shell';
-import { clearAlert, setBusy, showAlert } from '../ui/feedback';
+import { clearAlert, showAlert } from '../ui/feedback';
 import { lucideIcon } from '../ui/icons';
 import { initCloudSync } from '../services/cloudSync';
 import { askFinor, AskFinorRateLimitError, buildAskFinorContext, type AskFinorMessage, type AskFinorRateLimitInfo } from '../services/askFinor';
@@ -21,6 +21,30 @@ type ActionLink = {
   label: string;
   href: string;
 };
+
+type ConversationPair = {
+  pairId: number;
+  askedAt: string;
+  question: string;
+  answer: string;
+  questionLength: number;
+  answerLength: number;
+};
+
+function formatResponseTime(responseMs?: number): string {
+  if (!responseMs || responseMs <= 0) return '';
+  if (responseMs < 1000) return `${responseMs}ms`;
+  return `${(responseMs / 1000).toFixed(responseMs >= 10000 ? 0 : 1)}s`;
+}
+
+function renderFinorLogo(): string {
+  return `
+    <div class="ask-finor-brandmark" aria-hidden="true">
+      <span class="ask-finor-brandmark-main">F</span>
+      <span class="ask-finor-brandmark-dot"></span>
+    </div>
+  `;
+}
 
 function historyKey(userId: string): string {
   return `${ASK_FINOR_HISTORY_PREFIX}${userId}`;
@@ -54,6 +78,72 @@ function formatMessageText(value: string): string {
   return escapeHtml(value).replace(/\n/g, '<br />');
 }
 
+function escapeCsvCell(value: string | number): string {
+  const text = String(value ?? '');
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function buildConversationPairs(messages: AskFinorMessage[]): ConversationPair[] {
+  const pairs: ConversationPair[] = [];
+  let pendingQuestion: AskFinorMessage | null = null;
+
+  messages.forEach((message) => {
+    if (message.role === 'user') {
+      pendingQuestion = message;
+      return;
+    }
+
+    if (!pendingQuestion) return;
+    pairs.push({
+      pairId: pairs.length + 1,
+      askedAt: pendingQuestion.createdAt,
+      question: pendingQuestion.content,
+      answer: message.content,
+      questionLength: pendingQuestion.content.length,
+      answerLength: message.content.length
+    });
+    pendingQuestion = null;
+  });
+
+  return pairs;
+}
+
+function buildConversationCsv(messages: AskFinorMessage[]): string {
+  const pairs = buildConversationPairs(messages);
+  const headers = ['pairId', 'askedAt', 'question', 'answer', 'questionLength', 'answerLength'];
+  const lines = [headers.join(',')];
+  pairs.forEach((pair) => {
+    lines.push(
+      [
+        escapeCsvCell(pair.pairId),
+        escapeCsvCell(pair.askedAt),
+        escapeCsvCell(pair.question),
+        escapeCsvCell(pair.answer),
+        escapeCsvCell(pair.questionLength),
+        escapeCsvCell(pair.answerLength)
+      ].join(',')
+    );
+  });
+  return lines.join('\n');
+}
+
+function downloadConversationCsv(messages: AskFinorMessage[]): void {
+  const csv = buildConversationCsv(messages);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `ask-finor-chat-${stamp}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
 function guessActions(question: string, answer: string): ActionLink[] {
   const text = `${question} ${answer}`.toLowerCase();
   const actions: ActionLink[] = [];
@@ -77,18 +167,38 @@ function guessActions(question: string, answer: string): ActionLink[] {
   return actions.filter((action, index, arr) => arr.findIndex((item) => item.href === action.href) === index).slice(0, 3);
 }
 
-function renderThread(messages: AskFinorMessage[]): string {
+function renderThinkingMessage(): string {
+  return `
+    <article class="ask-finor-message assistant ask-finor-message-thinking">
+      <div class="ask-finor-message-head">
+        <div class="ask-finor-message-role">
+          ${renderFinorLogo()}
+          <span>Ask Finor</span>
+        </div>
+        <div class="ask-finor-message-time">Thinking...</div>
+      </div>
+      <div class="ask-finor-thinking">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="ask-finor-grounding">Reviewing your Finance App data and preparing the answer.</div>
+    </article>
+  `;
+}
+
+function renderThread(messages: AskFinorMessage[], isThinking = false): string {
   if (!messages.length) {
     return `
       <div class="ask-finor-empty">
         <div class="ask-finor-empty-icon">${lucideIcon('bot')}</div>
         <div class="fw-semibold mb-1">Ask about your portfolio, trades, expenses, or targets.</div>
-        <div class="text-muted small">Try one of the prompt chips above to get started.</div>
+        <div class="text-muted small">Try one of the suggestions near the composer to get started.</div>
       </div>
     `;
   }
 
-  return messages
+  const rendered = messages
     .map((message, index) => {
       const isAssistant = message.role === 'assistant';
       const previousQuestion = index > 0 ? messages[index - 1]?.content || '' : '';
@@ -97,10 +207,13 @@ function renderThread(messages: AskFinorMessage[]): string {
         <article class="ask-finor-message ${isAssistant ? 'assistant' : 'user'}">
           <div class="ask-finor-message-head">
             <div class="ask-finor-message-role">
-              ${isAssistant ? lucideIcon('bot') : lucideIcon('user-round')}
+              ${isAssistant ? renderFinorLogo() : lucideIcon('user-round')}
               <span>${isAssistant ? 'Ask Finor' : 'You'}</span>
             </div>
-            <div class="ask-finor-message-time">${formatDateTime(message.createdAt)}</div>
+            <div class="ask-finor-message-time">
+              ${formatDateTime(message.createdAt)}
+              ${isAssistant && message.responseMs ? `<span class="ask-finor-response-time">${formatResponseTime(message.responseMs)}</span>` : ''}
+            </div>
           </div>
           <div class="ask-finor-message-body">${formatMessageText(message.content)}</div>
           ${
@@ -123,6 +236,8 @@ function renderThread(messages: AskFinorMessage[]): string {
       `;
     })
     .join('');
+
+  return rendered + (isThinking ? renderThinkingMessage() : '');
 }
 
 function renderRateLimitPanel(info: AskFinorRateLimitInfo): string {
@@ -176,13 +291,16 @@ export function renderAskFinorView(root: HTMLElement): void {
 
           <div class="card shadow-sm border-0 ask-finor-hero mb-3">
             <div class="card-body">
-              <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-                <div>
+              <div class="ask-finor-hero-row">
+                <div class="ask-finor-hero-copy">
                   <div class="ask-finor-eyebrow">AI Mode</div>
-                  <h1 class="h5 mb-1 section-title">
-                    <span class="section-icon">${lucideIcon('message-square')}</span>
-                    Ask Finor
-                  </h1>
+                  <div class="ask-finor-brand-row">
+                    ${renderFinorLogo()}
+                    <div>
+                      <h1 class="h5 mb-1 section-title ask-finor-brand-title">Ask Finor</h1>
+                      <div class="ask-finor-version">Finor v1.6</div>
+                    </div>
+                  </div>
                   <div class="text-muted small ask-finor-copy">
                     Ask questions about your holdings, trades, profit &amp; loss, transactions, goals, and exit strategy scenarios.
                   </div>
@@ -193,14 +311,10 @@ export function renderAskFinorView(root: HTMLElement): void {
                 </div>
               </div>
 
-              <div class="ask-finor-meta-row mt-3">
+              <div class="ask-finor-meta-row">
                 <span class="ask-finor-meta-pill source">${lucideIcon('database')} App data only</span>
                 <span class="ask-finor-meta-pill model">${lucideIcon('sparkles')} Gemini</span>
                 <span class="ask-finor-meta-pill scope">${lucideIcon('briefcase-business')} Holdings, trades, finance, goals</span>
-              </div>
-
-              <div class="ask-finor-prompt-row mt-3">
-                ${PROMPTS.map((prompt) => `<button class="btn btn-sm btn-outline-secondary ask-finor-prompt" data-prompt="${escapeHtml(prompt)}" type="button">${prompt}</button>`).join('')}
               </div>
             </div>
           </div>
@@ -208,8 +322,8 @@ export function renderAskFinorView(root: HTMLElement): void {
           <div id="ask-finor-rate-limit" class="d-none"></div>
 
           <div class="card shadow-sm border-0 ask-finor-chat-card">
-            <div class="card-body">
-              <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+            <div class="card-body ask-finor-chat-body">
+              <div class="ask-finor-chat-head">
                 <div>
                   <div class="ask-finor-eyebrow">Conversation</div>
                   <h2 class="h6 mb-1 section-title">
@@ -217,21 +331,36 @@ export function renderAskFinorView(root: HTMLElement): void {
                     Chat with your data
                   </h2>
                 </div>
-                <button class="btn btn-sm btn-outline-secondary" id="ask-finor-clear" type="button">Clear chat</button>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-sm btn-outline-secondary" id="ask-finor-export" type="button">Export CSV</button>
+                  <button class="btn btn-sm btn-outline-secondary" id="ask-finor-clear" type="button">Clear chat</button>
+                </div>
               </div>
 
-              <div class="ask-finor-thread" id="ask-finor-thread"></div>
+              <div class="ask-finor-thread-wrap">
+                <div class="ask-finor-thread" id="ask-finor-thread"></div>
+                <button class="btn btn-primary ask-finor-scroll-latest d-none" id="ask-finor-scroll-latest" type="button" aria-label="Scroll to latest message">
+                  ${lucideIcon('chevron-down')}
+                </button>
+              </div>
 
-              <form class="ask-finor-composer" id="ask-finor-form">
-                <label class="form-label small text-muted" for="ask-finor-question">Question</label>
-                <textarea class="form-control ask-finor-textarea" id="ask-finor-question" rows="3" placeholder="Ask something like: Which holdings are currently in loss?"></textarea>
-                <div class="ask-finor-composer-actions">
-                  <div class="text-muted small">Answers are generated from your stored app data snapshot on this device.</div>
-                  <button class="btn btn-primary" id="ask-finor-send" type="submit">
-                    ${lucideIcon('send')} Ask Finor
-                  </button>
+              <div class="ask-finor-composer-stack">
+                <div class="ask-finor-suggestion-row" aria-label="Suggested prompts">
+                  ${PROMPTS.map((prompt) => `<button class="btn btn-sm btn-outline-secondary ask-finor-prompt" data-prompt="${escapeHtml(prompt)}" type="button">${prompt}</button>`).join('')}
                 </div>
-              </form>
+
+                <form class="ask-finor-composer" id="ask-finor-form">
+                  <div class="ask-finor-composer-shell">
+                    <textarea class="form-control ask-finor-textarea" id="ask-finor-question" rows="2" placeholder="Ask something like: Which holdings are currently in loss?"></textarea>
+                    <div class="ask-finor-composer-bar">
+                      <button class="btn btn-primary ask-finor-send-btn" id="ask-finor-send" type="submit" aria-label="Send question">
+                        ${lucideIcon('send')}
+                        <span>Send</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
             </div>
           </div>
         </div>
@@ -247,12 +376,81 @@ export function renderAskFinorView(root: HTMLElement): void {
     const textarea = root.querySelector<HTMLTextAreaElement>('#ask-finor-question');
     const sendButton = root.querySelector<HTMLButtonElement>('#ask-finor-send');
     const clearButton = root.querySelector<HTMLButtonElement>('#ask-finor-clear');
+    const exportButton = root.querySelector<HTMLButtonElement>('#ask-finor-export');
     const rateLimitPanel = root.querySelector<HTMLDivElement>('#ask-finor-rate-limit');
+    const scrollLatestButton = root.querySelector<HTMLButtonElement>('#ask-finor-scroll-latest');
+    const composerStack = root.querySelector<HTMLDivElement>('.ask-finor-composer-stack');
     const promptButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-prompt]'));
 
-    if (!feedback || !thread || !form || !textarea || !sendButton || !clearButton || !rateLimitPanel) return;
+    if (!feedback || !thread || !form || !textarea || !sendButton || !clearButton || !exportButton || !rateLimitPanel || !scrollLatestButton || !composerStack) return;
 
     let history = loadHistory(session.userId);
+    let isThinking = false;
+    let cooldownUntil = 0;
+    let cooldownTimer: number | null = null;
+
+    const scrollThreadToBottom = (behavior: ScrollBehavior = 'smooth') => {
+      const lastMessage = thread.lastElementChild as HTMLElement | null;
+      if (lastMessage) {
+        lastMessage.scrollIntoView({ behavior, block: 'end' });
+      }
+      composerStack.scrollIntoView({ behavior, block: 'end' });
+    };
+
+    const updateScrollLatestButton = () => {
+      const documentHeight = Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.offsetHeight
+      );
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+      const hiddenDistance = documentHeight - (scrollTop + viewportHeight);
+      scrollLatestButton.classList.toggle('d-none', hiddenDistance < 220);
+    };
+
+    const clearCooldown = () => {
+      cooldownUntil = 0;
+      if (cooldownTimer !== null) {
+        window.clearInterval(cooldownTimer);
+        cooldownTimer = null;
+      }
+      textarea.disabled = false;
+      sendButton.disabled = false;
+      textarea.value = '';
+      textarea.placeholder = 'Ask something like: Which holdings are currently in loss?';
+      promptButtons.forEach((button) => {
+        button.disabled = false;
+      });
+      textarea.focus();
+    };
+
+    const applyCooldown = (info: AskFinorRateLimitInfo) => {
+      const seconds = Math.max(1, Number(info.retryAfterSeconds || 10));
+      cooldownUntil = Date.now() + seconds * 1000;
+      textarea.disabled = true;
+      sendButton.disabled = true;
+      promptButtons.forEach((button) => {
+        button.disabled = true;
+      });
+
+      const updateCooldownText = () => {
+        const remainingMs = cooldownUntil - Date.now();
+        if (remainingMs <= 0) {
+          clearCooldown();
+          return;
+        }
+        const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+        textarea.value = `Gemini rate limit reached. Try again in ${remainingSeconds}s. Refresh page to unlock now.`;
+      };
+
+      updateCooldownText();
+      if (cooldownTimer !== null) {
+        window.clearInterval(cooldownTimer);
+      }
+      cooldownTimer = window.setInterval(updateCooldownText, 250);
+    };
 
     const hideRateLimitPanel = () => {
       rateLimitPanel.classList.add('d-none');
@@ -264,14 +462,20 @@ export function renderAskFinorView(root: HTMLElement): void {
       rateLimitPanel.classList.remove('d-none');
     };
 
-    const refreshThread = () => {
-      thread.innerHTML = renderThread(history);
-      thread.scrollTop = thread.scrollHeight;
+    const refreshThread = (forceScroll = false) => {
+      thread.innerHTML = renderThread(history, isThinking);
+      requestAnimationFrame(() => {
+        if (forceScroll) {
+          scrollThreadToBottom('smooth');
+        }
+        updateScrollLatestButton();
+      });
     };
 
     const runQuestion = async (question: string) => {
       const cleanQuestion = question.trim();
       if (!cleanQuestion) return;
+      if (cooldownUntil > Date.now()) return;
       clearAlert(feedback);
       hideRateLimitPanel();
       const userMessage: AskFinorMessage = {
@@ -280,16 +484,20 @@ export function renderAskFinorView(root: HTMLElement): void {
         createdAt: new Date().toISOString()
       };
       history = [...history, userMessage];
-      refreshThread();
+      refreshThread(true);
       textarea.value = '';
-      setBusy(sendButton, true, 'Ask Finor');
+      isThinking = true;
+      refreshThread(true);
+      sendButton.disabled = true;
       textarea.disabled = true;
       clearButton.disabled = true;
+      exportButton.disabled = true;
       promptButtons.forEach((button) => {
         button.disabled = true;
       });
 
       try {
+        const startedAt = performance.now();
         const context = await buildAskFinorContext(session.userId, session.name);
         const response = await askFinor({
           userId: session.userId,
@@ -302,32 +510,49 @@ export function renderAskFinorView(root: HTMLElement): void {
           {
             role: 'assistant',
             content: response.answer,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            responseMs: Math.round(performance.now() - startedAt)
           }
         ];
         saveHistory(session.userId, history);
-        refreshThread();
+        isThinking = false;
+        refreshThread(true);
       } catch (error) {
         history = history.slice(0, -1);
-        refreshThread();
+        isThinking = false;
+        refreshThread(false);
         if (error instanceof AskFinorRateLimitError) {
           showRateLimitPanel(error.info);
           showAlert(feedback, 'warning', error.info.message);
+          applyCooldown(error.info);
         } else {
           showAlert(feedback, 'danger', toErrorMessage(error));
         }
       } finally {
-        setBusy(sendButton, false, 'Ask Finor');
-        textarea.disabled = false;
+        isThinking = false;
+        refreshThread(false);
         clearButton.disabled = false;
-        promptButtons.forEach((button) => {
-          button.disabled = false;
-        });
-        textarea.focus();
+        exportButton.disabled = false;
+        if (cooldownUntil <= Date.now()) {
+          sendButton.disabled = false;
+          textarea.disabled = false;
+          promptButtons.forEach((button) => {
+            button.disabled = false;
+          });
+          textarea.focus();
+        }
       }
     };
 
-    refreshThread();
+    refreshThread(true);
+
+    window.addEventListener('scroll', () => {
+      updateScrollLatestButton();
+    }, { passive: true });
+
+    scrollLatestButton.addEventListener('click', () => {
+      scrollThreadToBottom();
+    });
 
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -344,7 +569,17 @@ export function renderAskFinorView(root: HTMLElement): void {
     clearButton.addEventListener('click', () => {
       history = [];
       saveHistory(session.userId, history);
-      refreshThread();
+      refreshThread(true);
+    });
+
+    exportButton.addEventListener('click', () => {
+      const pairs = buildConversationPairs(history);
+      if (!pairs.length) {
+        showAlert(feedback, 'warning', 'No completed Q&A pairs available to export yet.');
+        return;
+      }
+      downloadConversationCsv(history);
+      showAlert(feedback, 'success', `Exported ${pairs.length} chat pairs to CSV.`);
     });
 
     promptButtons.forEach((button) => {

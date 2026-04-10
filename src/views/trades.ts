@@ -178,6 +178,93 @@ function coerceId(value: unknown): string {
   return String(value || '').trim();
 }
 
+function padNumber(value: number, width: number): string {
+  return String(value).padStart(width, '0');
+}
+
+function formatExecutionSortKeyFromParts(datePart: string, hour: number, minute: number, second: number, sequence: number): string {
+  const safeSequence = Math.max(0, Math.min(999, sequence % 1000));
+  return `${datePart}T${padNumber(hour, 2)}:${padNumber(minute, 2)}:${padNumber(second, 2)}.${padNumber(safeSequence, 3)}`;
+}
+
+function buildExecutionAt(tradeDate: string, rawValue: unknown, sequence: number): string | undefined {
+  const fallbackDate = coerceDate(tradeDate);
+  const rawText = String(rawValue || '').trim();
+
+  if (rawValue instanceof Date && !Number.isNaN(rawValue.getTime())) {
+    return formatExecutionSortKeyFromParts(
+      rawValue.getFullYear().toString().padStart(4, '0') +
+        '-' +
+        padNumber(rawValue.getMonth() + 1, 2) +
+        '-' +
+        padNumber(rawValue.getDate(), 2),
+      rawValue.getHours(),
+      rawValue.getMinutes(),
+      rawValue.getSeconds(),
+      sequence
+    );
+  }
+
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+    const parsed = XLSX.SSF.parse_date_code(rawValue);
+    if (parsed) {
+      const datePart = `${padNumber(parsed.y, 4)}-${padNumber(parsed.m, 2)}-${padNumber(parsed.d, 2)}`;
+      return formatExecutionSortKeyFromParts(
+        fallbackDate || datePart,
+        parsed.H || 0,
+        parsed.M || 0,
+        Math.floor(parsed.S || 0),
+        sequence
+      );
+    }
+  }
+
+  if (rawText) {
+    const fullMatch = rawText.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (fullMatch) {
+      return formatExecutionSortKeyFromParts(
+        fullMatch[1],
+        Number(fullMatch[2] || 0),
+        Number(fullMatch[3] || 0),
+        Number(fullMatch[4] || 0),
+        sequence
+      );
+    }
+
+    const timeMatch = rawText.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (timeMatch && fallbackDate) {
+      return formatExecutionSortKeyFromParts(
+        fallbackDate,
+        Number(timeMatch[1] || 0),
+        Number(timeMatch[2] || 0),
+        Number(timeMatch[3] || 0),
+        sequence
+      );
+    }
+
+    const parsed = new Date(rawText);
+    if (!Number.isNaN(parsed.getTime())) {
+      return formatExecutionSortKeyFromParts(
+        fallbackDate ||
+          `${parsed.getFullYear().toString().padStart(4, '0')}-${padNumber(parsed.getMonth() + 1, 2)}-${padNumber(
+            parsed.getDate(),
+            2
+          )}`,
+        parsed.getHours(),
+        parsed.getMinutes(),
+        parsed.getSeconds(),
+        sequence
+      );
+    }
+  }
+
+  if (fallbackDate) {
+    return formatExecutionSortKeyFromParts(fallbackDate, 0, 0, 0, sequence);
+  }
+
+  return undefined;
+}
+
 function buildImportId(...values: Array<string | undefined>): string | undefined {
   const raw = values.find((value) => value && String(value).trim());
   if (!raw) return undefined;
@@ -523,6 +610,7 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
     const quantity = Number(row[qtyIdx]);
     const price = Number(row[priceIdx]);
     const tradeDate = coerceDate(dateIdx >= 0 ? row[dateIdx] : '');
+    const executionAt = buildExecutionAt(tradeDate, execTimeIdx >= 0 ? row[execTimeIdx] : '', index);
     const notes = notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '';
     const importId = buildImportId(
       coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
@@ -543,6 +631,7 @@ function parseCsvTrades(text: string, userId: string): CsvAnalysis {
       quantity,
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+      executionAt,
       notes,
       companyName: companyName || undefined,
       importId
@@ -576,6 +665,14 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       'exch_order_id',
       'exchange_order_no'
     ]);
+    const execTimeIdx = headerIndex(headers, [
+      'order_execution_time',
+      'trade_time',
+      'execution_time',
+      'timestamp',
+      'order_time',
+      'time'
+    ]);
     const narrationIdx = headerIndex(headers, ['narration', 'remarks']);
     const buyQtyIdx = headerIndex(headers, ['b_qty', 'bqty']);
     const buyRateIdx = headerIndex(headers, ['b_n_rate', 'b_gr_rate', 'b_rate']);
@@ -593,6 +690,7 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       const symbol = normalizeSymbol(rawScrip);
       const companyName = inferCompanyName(rawScrip, companyIdx >= 0 ? String(row[companyIdx] || '') : '');
       const tradeDate = coerceDate(row[dateIdx]);
+      const executionAt = buildExecutionAt(tradeDate, execTimeIdx >= 0 ? row[execTimeIdx] : '', index);
       const buyQty = buyQtyIdx >= 0 ? Number(row[buyQtyIdx]) : 0;
       const sellQty = sellQtyIdx >= 0 ? Number(row[sellQtyIdx]) : 0;
       const buyRate = buyRateIdx >= 0 ? Number(row[buyRateIdx]) : 0;
@@ -600,7 +698,8 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       const baseImportId = buildImportId(
         coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
         coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
-        coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+        coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : ''),
+        coerceId(execTimeIdx >= 0 ? row[execTimeIdx] : '')
       );
 
       if (!symbol) {
@@ -616,6 +715,7 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
           quantity: buyQty,
           price: buyRate,
           tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+          executionAt,
           companyName: companyName || undefined,
           importId: baseImportId ? `${baseImportId}|BUY` : undefined
         });
@@ -629,6 +729,7 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
           quantity: sellQty,
           price: sellRate,
           tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+          executionAt,
           companyName: companyName || undefined,
           importId: baseImportId ? `${baseImportId}|SELL` : undefined
         });
@@ -652,6 +753,14 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
     'exch_order_id',
     'exchange_order_no'
   ]);
+  const execTimeIdx = headerIndex(headers, [
+    'order_execution_time',
+    'trade_time',
+    'execution_time',
+    'timestamp',
+    'order_time',
+    'time'
+  ]);
   const notesIdx = headerIndex(headers, ['notes', 'note', 'remarks']);
 
   if (symbolIdx < 0 || qtyIdx < 0 || priceIdx < 0) {
@@ -668,11 +777,13 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
     const quantity = Number(row[qtyIdx]);
     const price = Number(row[priceIdx]);
     const tradeDate = coerceDate(dateIdx >= 0 ? row[dateIdx] : '');
+    const executionAt = buildExecutionAt(tradeDate, execTimeIdx >= 0 ? row[execTimeIdx] : '', index);
     const notes = notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '';
     const importId = buildImportId(
       coerceId(tradeIdIdx >= 0 ? row[tradeIdIdx] : ''),
       coerceId(orderIdIdx >= 0 ? row[orderIdIdx] : ''),
-      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : '')
+      coerceId(exchangeIdIdx >= 0 ? row[exchangeIdIdx] : ''),
+      coerceId(execTimeIdx >= 0 ? row[execTimeIdx] : '')
     );
 
     if (!symbol || !Number.isFinite(quantity) || !Number.isFinite(price)) {
@@ -687,6 +798,7 @@ function parseExcelTrades(rows: unknown[][], userId: string): CsvAnalysis | null
       quantity,
       price,
       tradeDate: tradeDate || new Date().toISOString().slice(0, 10),
+      executionAt,
       notes,
       companyName: companyName || undefined,
       importId
