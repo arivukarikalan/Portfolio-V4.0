@@ -45,12 +45,239 @@ function doPost(e) {
   if (mode === 'resolve_ticker_request') return jsonResponse(handleResolveTickerRequest(body));
   if (mode === 'live_prices') return jsonResponse(handleLivePrices(body));
   if (mode === 'price_history') return jsonResponse(handlePriceHistory(body));
+  if (mode === 'ask_finor') return jsonResponse(handleAskFinor(body));
 
   return jsonResponse({ ok: false, message: 'Unsupported POST mode' });
 }
 
 function jsonResponse(payload) {
   return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function getGeminiApiKey() {
+  return String(PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim();
+}
+
+function getGeminiModel() {
+  return String(PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
+}
+
+function truncateText(value, maxChars) {
+  const text = String(value || '');
+  if (!maxChars || text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + '...';
+}
+
+function parseRetryDelaySeconds(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/(\d+(?:\.\d+)?)s/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? Math.ceil(parsed) : null;
+}
+
+function parseGeminiRateLimitInfo(bodyText, model) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(bodyText || '{}');
+  } catch (err) {
+    parsed = null;
+  }
+
+  const error = parsed && parsed.error ? parsed.error : {};
+  const details = Array.isArray(error.details) ? error.details : [];
+  let retryAfterSeconds = null;
+  let quotaMetric = null;
+  let docsUrl = null;
+
+  details.forEach(function (detail) {
+    if (!detail || typeof detail !== 'object') return;
+    const type = String(detail['@type'] || '');
+    if (type.indexOf('RetryInfo') !== -1) {
+      retryAfterSeconds = retryAfterSeconds || parseRetryDelaySeconds(detail.retryDelay);
+    }
+    if (type.indexOf('QuotaFailure') !== -1) {
+      const violations = Array.isArray(detail.violations) ? detail.violations : [];
+      violations.forEach(function (violation) {
+        if (!quotaMetric && violation && violation.description) {
+          quotaMetric = String(violation.description);
+        }
+      });
+    }
+    if (type.indexOf('Help') !== -1) {
+      const links = Array.isArray(detail.links) ? detail.links : [];
+      links.forEach(function (link) {
+        if (!docsUrl && link && link.url) {
+          docsUrl = String(link.url);
+        }
+      });
+    }
+  });
+
+  if (!retryAfterSeconds) {
+    retryAfterSeconds = parseRetryDelaySeconds(String(error.message || ''));
+  }
+
+  return {
+    provider: 'gemini',
+    model: model,
+    retryAfterSeconds: retryAfterSeconds,
+    resetHint: 'Free-tier daily quota usually resets around midnight Pacific time.',
+    quotaMetric: quotaMetric,
+    docsUrl: docsUrl,
+    message: retryAfterSeconds
+      ? 'Gemini rate limit reached. Try again in about ' + retryAfterSeconds + ' seconds.'
+      : 'Gemini rate limit reached. Please wait a bit and try again.'
+  };
+}
+
+function stringifyContext(value, maxChars) {
+  let text = '';
+  try {
+    text = JSON.stringify(value || {});
+  } catch (err) {
+    text = '{}';
+  }
+  return truncateText(text, maxChars || 90000);
+}
+
+function extractGeminiText(payload) {
+  if (!payload) return '';
+  const output = Array.isArray(payload.candidates) ? payload.candidates : [];
+  const chunks = [];
+  output.forEach(function (item) {
+    const content = item && item.content && Array.isArray(item.content.parts) ? item.content.parts : [];
+    content.forEach(function (part) {
+      if (typeof part.text === 'string' && part.text.trim()) {
+        chunks.push(part.text.trim());
+      }
+    });
+  });
+  return chunks.join('\n\n').trim();
+}
+
+function handleAskFinor(body) {
+  const auth = assertActiveUser(body.userId);
+  if (!auth.ok) return auth;
+
+  const apiKey = getGeminiApiKey();
+  const model = getGeminiModel();
+  if (!apiKey) {
+    return { ok: false, message: 'GEMINI_API_KEY is missing in Apps Script Script Properties' };
+  }
+
+  const question = String(body.question || '').trim();
+  if (!question) return { ok: false, message: 'Question is required' };
+
+  const context = body.context && typeof body.context === 'object' ? body.context : {};
+  const deterministicAnswer = buildDeterministicAskFinorAnswer(question, context);
+  if (deterministicAnswer) {
+    return {
+      ok: true,
+      data: {
+        answer: deterministicAnswer,
+        model: 'deterministic-finance-rules'
+      }
+    };
+  }
+
+  const conversation = Array.isArray(body.conversation) ? body.conversation : [];
+  const transcript = conversation
+    .slice(-6)
+    .map(function (message) {
+      const role = String(message.role || 'user').toUpperCase();
+      return role + ': ' + truncateText(String(message.content || '').trim(), 800);
+    })
+    .join('\n');
+
+  const instructions = [
+    'You are Ask Finor, a portfolio-aware assistant inside Finance App.',
+    'Answer only from the provided Finance App JSON context and the recent conversation.',
+    'Do not use live market knowledge, news, or outside facts.',
+    'Do not give buy, sell, hold, or timing advice.',
+    'If the user asks for unsupported live or predictive advice, say you can only summarize Finance App data.',
+    'Use Indian rupees only. Never use dollars or any other currency symbol.',
+    'When you mention money, format it as INR or ₹.',
+    'Use exact numbers from context when possible.',
+    'If data is missing, say that clearly instead of guessing.',
+    'Keep the answer concise and practical.'
+  ].join(' ');
+
+  const inputText =
+    'User question:\n' +
+    question +
+    '\n\nRecent conversation:\n' +
+    (transcript || 'No prior conversation.') +
+    '\n\nFinance App data context (JSON):\n' +
+    stringifyContext(context, 90000);
+
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text:
+              'System instructions:\n' +
+              instructions +
+              '\n\n' +
+              inputText
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      maxOutputTokens: 520,
+      temperature: 0.25
+    }
+  };
+
+  let response;
+  try {
+    response = UrlFetchApp.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        headers: {
+          'x-goog-api-key': apiKey
+        },
+        muteHttpExceptions: true,
+        payload: JSON.stringify(payload)
+      }
+    );
+  } catch (err) {
+    return { ok: false, message: 'Gemini request failed: ' + err.message };
+  }
+
+  const status = response.getResponseCode();
+  const bodyText = response.getContentText();
+  if (status === 429) {
+    return { ok: false, message: 'ASK_FINOR_RATE_LIMIT::' + JSON.stringify(parseGeminiRateLimitInfo(bodyText, model)) };
+  }
+  if (status < 200 || status >= 300) {
+    return { ok: false, message: 'Gemini request failed (' + status + '): ' + truncateText(bodyText, 400) };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch (err) {
+    return { ok: false, message: 'Gemini returned invalid JSON' };
+  }
+
+  const answer = extractGeminiText(parsed);
+  if (!answer) {
+    return { ok: false, message: 'Ask Finor could not generate an answer' };
+  }
+
+  return {
+    ok: true,
+    data: {
+      answer: answer,
+      model: model
+    }
+  };
 }
 
 function nowIso() {
@@ -92,6 +319,100 @@ function normalizeSymbol(value) {
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function formatInr(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return '₹0.00';
+  return '₹' + num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatPctNumber(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return '0.00%';
+  const sign = num > 0 ? '+' : '';
+  return sign + num.toFixed(2) + '%';
+}
+
+function findHoldingFromQuestion(question, context) {
+  const holdings =
+    context && context.portfolio && Array.isArray(context.portfolio.holdings) ? context.portfolio.holdings : [];
+  const upper = String(question || '').toUpperCase();
+  for (var i = 0; i < holdings.length; i += 1) {
+    var holding = holdings[i];
+    var symbol = normalizeSymbol(holding && holding.symbol);
+    if (!symbol) continue;
+    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
+    if (pattern.test(upper)) return holding;
+  }
+  return null;
+}
+
+function buildDeterministicAskFinorAnswer(question, context) {
+  const text = String(question || '').trim().toLowerCase();
+  const holding = findHoldingFromQuestion(question, context);
+  if (!holding) return null;
+
+  const askTarget = /(target price|target sell price|sell price|exit price)/.test(text);
+  const askBreakEven = /(break even|breakeven)/.test(text);
+  const askHoldingSummary = /(holding|position|qty|quantity|avg buy|ltp|current value|profit|loss|p&l|pnl)/.test(text);
+
+  if (askTarget && holding.targetSellPrice) {
+    return (
+      holding.symbol +
+      ' target sell price is ' +
+      formatInr(holding.targetSellPrice) +
+      ' per share. This is based on your target profit setting of ' +
+      formatPctNumber(context.settings && context.settings.targetProfitPct) +
+      ', current open quantity of ' +
+      Number(holding.qty || 0) +
+      ', and your configured brokerage and DP charges. Break-even sell price is ' +
+      formatInr(holding.breakEvenSellPrice) +
+      ' per share.'
+    );
+  }
+
+  if (askBreakEven && holding.breakEvenSellPrice) {
+    return (
+      holding.symbol +
+      ' break-even sell price is ' +
+      formatInr(holding.breakEvenSellPrice) +
+      ' per share. Your target sell price with the current app settings is ' +
+      formatInr(holding.targetSellPrice) +
+      ' per share.'
+    );
+  }
+
+  if (askHoldingSummary) {
+    return (
+      holding.symbol +
+      ' holding summary: quantity ' +
+      Number(holding.qty || 0) +
+      ', average buy ' +
+      formatInr(holding.avgBuy) +
+      ', LTP ' +
+      formatInr(holding.ltp) +
+      ', invested ' +
+      formatInr(holding.invested) +
+      ', current value ' +
+      formatInr(holding.currentValue) +
+      ', unrealized P&L ' +
+      formatInr(holding.unrealizedPnl) +
+      ' (' +
+      formatPctNumber(holding.unrealizedPnlPct) +
+      '). Target sell price is ' +
+      formatInr(holding.targetSellPrice) +
+      ' and break-even sell price is ' +
+      formatInr(holding.breakEvenSellPrice) +
+      '.'
+    );
+  }
+
+  return null;
 }
 
 function sha256Hex(value) {
@@ -908,6 +1229,23 @@ function handlePriceHistory(body) {
   } catch (err) {
     return { ok: false, message: normalizeLivePriceError(String((err && err.message) || err || 'unknown')) };
   }
+}
+
+function fetchJsonUrl(url) {
+  const res = UrlFetchApp.fetch(url, {
+    method: 'get',
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      Accept: 'application/json,text/plain,*/*'
+    }
+  });
+  const code = Number(res.getResponseCode() || 0);
+  if (code < 200 || code >= 300) {
+    throw new Error('json_http_' + code);
+  }
+  return JSON.parse(res.getContentText() || '{}');
 }
 
 function handlePush(body) {

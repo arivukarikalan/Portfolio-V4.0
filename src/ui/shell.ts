@@ -32,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: 'dashboard.html' },
   { id: 'holdings', label: 'Holdings', icon: 'pie-chart', href: 'holdings.html' },
   { id: 'trades', label: 'Trades', icon: 'repeat', href: 'trades.html' },
+  { id: 'ask-finor', label: 'Ask Finor', icon: 'message-square', href: 'ask-finor.html' },
   { id: 'exit-strategy', label: 'Exit Strategy', icon: 'crosshair', href: 'exit-strategy.html' },
   { id: 'insights', label: 'Insights', icon: 'lightbulb', href: 'insights.html' },
   { id: 'target', label: 'Target Planner', icon: 'target', href: 'target.html' },

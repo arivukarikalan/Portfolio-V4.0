@@ -267,7 +267,6 @@ export function renderHoldingsView(root: HTMLElement): void {
     const pieEmpty = root.querySelector<HTMLDivElement>('#holdings-pie-empty');
     const barEmpty = root.querySelector<HTMLDivElement>('#holdings-bar-empty');
     const pieLegend = root.querySelector<HTMLDivElement>('#holdings-legend');
-
     let trades: TradeRecord[] = [];
     let holdings: HoldingRow[] = [];
     let allocationLimit = 0;

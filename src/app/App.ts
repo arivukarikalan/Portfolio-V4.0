@@ -4,6 +4,7 @@ import { renderDashboardView } from '../views/dashboard';
 import { renderAdminView } from '../views/admin';
 import { renderHoldingsView } from '../views/holdings';
 import { renderTradesView } from '../views/trades';
+import { renderAskFinorView } from '../views/askFinor';
 import { renderExitStrategyView } from '../views/exitStrategy';
 import { renderInsightsView } from '../views/insights';
 import { renderTargetView } from '../views/target';
@@ -31,6 +32,9 @@ export function bootstrapApp(root: HTMLElement, view: AppView): void {
       break;
     case 'trades':
       renderTradesView(root);
+      break;
+    case 'ask-finor':
+      renderAskFinorView(root);
       break;
     case 'exit-strategy':
       renderExitStrategyView(root);
