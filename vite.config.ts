@@ -12,6 +12,7 @@ export default defineConfig({
         admin: resolve(__dirname, 'admin.html'),
         holdings: resolve(__dirname, 'holdings.html'),
         trades: resolve(__dirname, 'trades.html'),
+        'ask-finor': resolve(__dirname, 'ask-finor.html'),
         'exit-strategy': resolve(__dirname, 'exit-strategy.html'),
         insights: resolve(__dirname, 'insights.html'),
         target: resolve(__dirname, 'target.html'),
