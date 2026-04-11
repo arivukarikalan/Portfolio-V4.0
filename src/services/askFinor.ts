@@ -15,6 +15,104 @@ export type AskFinorMessage = {
   content: string;
   createdAt: string;
   responseMs?: number;
+  answerKind?: AskFinorAnswerKind;
+  cards?: AskFinorCard[];
+  clarification?: AskFinorClarification | null;
+  resolvedQuery?: AskFinorResolvedQuery | null;
+};
+
+export type AskFinorDomain = 'holdings' | 'trades' | 'portfolio' | 'simulation' | 'finance' | 'conversation';
+
+export type AskFinorIntent =
+  | 'portfolio_summary'
+  | 'portfolio_today_summary'
+  | 'holdings_list'
+  | 'holding_summary'
+  | 'open_positions'
+  | 'top_gainer_unrealized'
+  | 'top_loser_unrealized'
+  | 'highest_return_percent'
+  | 'lowest_return_percent'
+  | 'highest_invested_holding'
+  | 'lowest_invested_holding'
+  | 'allocation_query'
+  | 'asset_allocation_query'
+  | 'risk_summary'
+  | 'top_allocation_risks'
+  | 'unrealized_pnl_total'
+  | 'unrealized_pnl_by_stock'
+  | 'realized_pnl_total'
+  | 'realized_pnl_by_stock'
+  | 'realized_loss_stock_names'
+  | 'realized_profit_stock_names'
+  | 'date_range_realized_pnl'
+  | 'current_month_investment'
+  | 'date_range_investment'
+  | 'most_traded_stock'
+  | 'trade_frequency_summary'
+  | 'top_5_losers'
+  | 'top_5_gainers'
+  | 'sell_simulation'
+  | 'break_even_query'
+  | 'charges_estimation'
+  | 'compare_holdings'
+  | 'best_performer'
+  | 'worst_performer'
+  | 'gold_allocation_query'
+  | 'cash_allocation_query'
+  | 'help_or_capabilities'
+  | 'clarification_needed'
+  | 'unsupported_query'
+  | 'correction_followup'
+  | 'greeting';
+
+export type AskFinorResolvedEntity = {
+  symbol: string;
+  confidence: number;
+  kind: 'stock' | 'category';
+};
+
+export type AskFinorResolvedDateRange = {
+  label: string;
+  fromDate: string;
+  toDate: string | null;
+};
+
+export type AskFinorResolvedQuery = {
+  intent: AskFinorIntent;
+  domain: AskFinorDomain;
+  entities: AskFinorResolvedEntity[];
+  dateRange: AskFinorResolvedDateRange | null;
+  metric: string | null;
+  confidence: {
+    intent: number;
+    entity: number;
+    dateRange: number;
+    metric: number;
+  };
+  resultType: 'summary' | 'list' | 'ranking' | 'detail' | 'simulation' | 'clarification' | 'narrative';
+};
+
+export type AskFinorAnswerKind =
+  | 'narrative'
+  | 'portfolio_summary'
+  | 'ranking'
+  | 'holding_detail'
+  | 'simulation'
+  | 'clarification'
+  | 'list';
+
+export type AskFinorCard = {
+  kind: 'portfolio_summary' | 'ranking' | 'holding_detail' | 'simulation' | 'clarification';
+  title: string;
+  metrics?: Array<{ label: string; value: string }>;
+  items?: string[];
+  note?: string;
+};
+
+export type AskFinorClarification = {
+  message: string;
+  suggestions?: string[];
 };
 
 type HoldingBrief = {
@@ -167,9 +265,13 @@ export type AskFinorContext = {
   };
 };
 
-type AskFinorApiResponse = {
+export type AskFinorApiResponse = {
   answer: string;
   model?: string;
+  answerKind?: AskFinorAnswerKind;
+  cards?: AskFinorCard[];
+  clarification?: AskFinorClarification | null;
+  resolvedQuery?: AskFinorResolvedQuery | null;
 };
 
 export type AskFinorRateLimitInfo = {

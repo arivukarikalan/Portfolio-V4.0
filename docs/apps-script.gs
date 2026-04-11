@@ -171,13 +171,22 @@ function handleAskFinor(body) {
 
   const context = body.context && typeof body.context === 'object' ? body.context : {};
   const conversation = Array.isArray(body.conversation) ? body.conversation : [];
-  const deterministicAnswer = buildDeterministicAskFinorAnswer(question, context, conversation);
+  const deterministicAnswer = normalizeAnswerPayload(
+    buildDeterministicAskFinorAnswerV2(question, context, conversation) || buildDeterministicAskFinorAnswer(question, context, conversation),
+    'unsupported_query',
+    'conversation'
+  );
   if (deterministicAnswer) {
     return {
       ok: true,
       data: {
-        answer: deterministicAnswer,
+        answer: deterministicAnswer.answer,
         model: 'deterministic-finance-rules'
+        ,
+        answerKind: deterministicAnswer.answerKind,
+        cards: deterministicAnswer.cards,
+        clarification: deterministicAnswer.clarification,
+        resolvedQuery: deterministicAnswer.resolvedQuery
       }
     };
   }
@@ -275,7 +284,19 @@ function handleAskFinor(body) {
     ok: true,
     data: {
       answer: answer,
-      model: model
+      model: model,
+      answerKind: 'narrative',
+      cards: [],
+      clarification: null,
+      resolvedQuery: makeResolvedQuery(
+        'unsupported_query',
+        'conversation',
+        [],
+        makeDateRangePayload(buildDateWindowFromText(String(question || '').trim().toLowerCase())),
+        null,
+        makeConfidence(0.45, 0, 0.3, 0.3),
+        'narrative'
+      )
     }
   };
 }
@@ -321,6 +342,120 @@ function normalizeSymbol(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+const FINOR_SYMBOL_ALIASES = {
+  WAAREE: 'WAAREERTL',
+  WAAREERTL: 'WAAREERTL',
+  DABURINDIA: 'DABUR',
+  DABUR: 'DABUR',
+  COLGATE: 'COLPAL',
+  COLPAL: 'COLPAL',
+  HINDUSTANAERONAUTICS: 'HAL',
+  HAL: 'HAL',
+  RELIANCEINDUSTRIES: 'RELIANCE',
+  RELIANCE: 'RELIANCE',
+  GOLDBEES: 'GOLDBEES',
+  GOLDIETF: 'GOLDIETF',
+  GOLDETF: 'GOLDIETF'
+};
+
+function normalizeLooseText(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getQuestionTokens(question) {
+  var normalized = normalizeLooseText(question);
+  return normalized ? normalized.split(' ') : [];
+}
+
+function resolveAliasSymbolCandidates(question) {
+  var collapsed = normalizeSymbol(question);
+  var tokens = getQuestionTokens(question);
+  var matches = [];
+  var pushMatch = function (value) {
+    if (!value) return;
+    if (matches.indexOf(value) === -1) matches.push(value);
+  };
+
+  for (var key in FINOR_SYMBOL_ALIASES) {
+    var aliasTarget = FINOR_SYMBOL_ALIASES[key];
+    if (collapsed === key || collapsed.indexOf(key) >= 0 || key.indexOf(collapsed) >= 0) {
+      pushMatch(aliasTarget);
+    }
+  }
+
+  tokens.forEach(function (token) {
+    var compact = normalizeSymbol(token);
+    if (!compact) return;
+    if (FINOR_SYMBOL_ALIASES[compact]) pushMatch(FINOR_SYMBOL_ALIASES[compact]);
+    for (var alias in FINOR_SYMBOL_ALIASES) {
+      if (alias.indexOf(compact) === 0 || compact.indexOf(alias) === 0) {
+        pushMatch(FINOR_SYMBOL_ALIASES[alias]);
+      }
+    }
+  });
+
+  return matches;
+}
+
+function scoreSymbolMatch(question, symbol) {
+  var normalizedQuestion = normalizeLooseText(question);
+  var compactQuestion = normalizeSymbol(question);
+  var compactSymbol = normalizeSymbol(symbol);
+  if (!compactSymbol) return 0;
+
+  var best = 0;
+  var exactPattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(compactSymbol) + '([^A-Z0-9]|$)');
+  if (exactPattern.test(compactQuestion)) best = Math.max(best, 120);
+  if (compactQuestion === compactSymbol) best = Math.max(best, 125);
+
+  var aliasCandidates = resolveAliasSymbolCandidates(question);
+  if (aliasCandidates.indexOf(compactSymbol) >= 0) best = Math.max(best, 110);
+
+  var tokens = getQuestionTokens(question);
+  tokens.forEach(function (token) {
+    var compactToken = normalizeSymbol(token);
+    if (!compactToken) return;
+    if (compactToken === compactSymbol) best = Math.max(best, 105);
+    if (compactSymbol.indexOf(compactToken) >= 0 && compactToken.length >= 4) best = Math.max(best, 84);
+    if (compactToken.indexOf(compactSymbol) >= 0 && compactSymbol.length >= 4) best = Math.max(best, 82);
+    if (compactToken.length >= 4 && compactSymbol.length >= 4) {
+      var shared = 0;
+      while (
+        shared < compactToken.length &&
+        shared < compactSymbol.length &&
+        compactToken.charAt(shared) === compactSymbol.charAt(shared)
+      ) {
+        shared += 1;
+      }
+      if (shared >= 4) best = Math.max(best, 70 + shared);
+    }
+  });
+
+  if (normalizedQuestion.indexOf(symbol) >= 0) best = Math.max(best, 95);
+  return best;
+}
+
+function resolveBestCandidate(question, rows, getSymbol) {
+  var bestRow = null;
+  var bestScore = 0;
+  for (var i = 0; i < rows.length; i += 1) {
+    var row = rows[i];
+    var symbol = String(getSymbol(row) || '').trim();
+    if (!symbol) continue;
+    var score = scoreSymbolMatch(question, symbol);
+    if (score > bestScore) {
+      bestScore = score;
+      bestRow = row;
+    }
+  }
+  return bestScore >= 80 ? bestRow : null;
+}
+
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -338,18 +473,182 @@ function formatPctNumber(value) {
   return sign + num.toFixed(2) + '%';
 }
 
+function makeConfidence(intent, entity, dateRange, metric) {
+  return {
+    intent: Number(intent || 0),
+    entity: Number(entity || 0),
+    dateRange: Number(dateRange || 0),
+    metric: Number(metric || 0)
+  };
+}
+
+function makeResolvedEntity(symbol, kind, confidence) {
+  if (!symbol) return null;
+  return {
+    symbol: String(symbol),
+    confidence: Number(confidence || 0),
+    kind: kind || 'stock'
+  };
+}
+
+function makeDateRangePayload(window) {
+  if (!window) return null;
+  return {
+    label: String(window.label || ''),
+    fromDate: String(window.fromDate || ''),
+    toDate: window.toDate ? String(window.toDate) : null
+  };
+}
+
+function makeResolvedQuery(intent, domain, entities, dateRange, metric, confidence, resultType) {
+  return {
+    intent: intent,
+    domain: domain,
+    entities: (entities || []).filter(Boolean),
+    dateRange: makeDateRangePayload(dateRange),
+    metric: metric || null,
+    confidence: confidence || makeConfidence(0, 0, 0, 0),
+    resultType: resultType || 'narrative'
+  };
+}
+
+function makeCard(kind, title, metrics, items, note) {
+  return {
+    kind: kind,
+    title: title,
+    metrics: Array.isArray(metrics) ? metrics : [],
+    items: Array.isArray(items) ? items : [],
+    note: note || ''
+  };
+}
+
+function makeAnswerPayload(answer, options) {
+  var config = options || {};
+  return {
+    answer: String(answer || ''),
+    answerKind: config.answerKind || 'narrative',
+    cards: Array.isArray(config.cards) ? config.cards : [],
+    clarification: config.clarification || null,
+    resolvedQuery: config.resolvedQuery || null
+  };
+}
+
+function makeClarificationPayload(message, suggestions, resolvedQuery) {
+  return makeAnswerPayload(message, {
+    answerKind: 'clarification',
+    clarification: {
+      message: message,
+      suggestions: suggestions || []
+    },
+    cards: [
+      makeCard('clarification', 'Need a little more direction', [], suggestions || [], message)
+    ],
+    resolvedQuery: resolvedQuery || null
+  });
+}
+
+function buildPortfolioSummaryCard(context) {
+  var portfolio = getPortfolioContext(context);
+  var pnl = context && context.pnl ? context.pnl : {};
+  var topHolding = Array.isArray(portfolio.topHoldings) && portfolio.topHoldings.length ? portfolio.topHoldings[0] : null;
+  var topGainer = getContextHoldings(context)
+    .slice()
+    .sort(function (a, b) { return Number(b.unrealizedPnlPct || 0) - Number(a.unrealizedPnlPct || 0); })[0] || null;
+  return makeCard(
+    'portfolio_summary',
+    'Portfolio snapshot',
+    [
+      { label: 'Holdings', value: String(Number(portfolio.holdingsCount || 0)) },
+      { label: 'Invested', value: formatInr(portfolio.invested) },
+      { label: 'Current Value', value: formatInr(portfolio.currentValue) },
+      { label: 'Unrealized P&L', value: formatInr(portfolio.unrealizedPnl) + ' (' + formatPctNumber(portfolio.unrealizedPnlPct) + ')' },
+      { label: 'Realized P&L', value: formatInr(pnl.realizedPnl) }
+    ],
+    [],
+    (topHolding ? 'Largest allocation: ' + topHolding.symbol + '. ' : '') +
+      (topGainer ? 'Best performer: ' + topGainer.symbol + '.' : '')
+  );
+}
+
+function buildRankingCard(title, items, note) {
+  return makeCard('ranking', title, [], items || [], note || '');
+}
+
+function buildHoldingDetailCard(holding) {
+  if (!holding) return null;
+  return makeCard(
+    'holding_detail',
+    holding.symbol + ' holding detail',
+    [
+      { label: 'Quantity', value: String(Number(holding.qty || 0)) },
+      { label: 'Avg Buy', value: formatInr(holding.avgBuy) },
+      { label: 'Current Value', value: formatInr(holding.currentValue) },
+      { label: 'Unrealized P&L', value: formatInr(holding.unrealizedPnl) + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ')' },
+      { label: 'Allocation', value: formatPctNumber(holding.allocationPct).replace('+', '') },
+      { label: 'Break-even', value: formatInr(holding.breakEvenSellPrice) }
+    ],
+    [],
+    'Target sell price: ' + formatInr(holding.targetSellPrice)
+  );
+}
+
+function buildSimulationCard(holding, context, sellPrice) {
+  if (!holding) return null;
+  var qty = Number(holding.qty || 0);
+  var sellRate = Number(context && context.settings ? context.settings.sellBrokeragePct || 0 : 0);
+  var dpCharge = Number(context && context.settings ? context.settings.dpCharge || 0 : 0);
+  var effectiveInvested = Number(holding.effectiveInvested || holding.invested || 0);
+  var grossValue = qty * sellPrice;
+  var charges = grossValue * (sellRate / 100) + dpCharge;
+  var netValue = grossValue - charges;
+  var profit = netValue - effectiveInvested;
+  var returnPct = effectiveInvested > 0 ? (profit / effectiveInvested) * 100 : 0;
+  return makeCard(
+    'simulation',
+    holding.symbol + ' sell simulation',
+    [
+      { label: 'Sell Price', value: formatInr(sellPrice) },
+      { label: 'Quantity', value: String(qty) },
+      { label: 'Gross Value', value: formatInr(grossValue) },
+      { label: 'Estimated Charges', value: formatInr(charges) },
+      { label: 'Net Proceeds', value: formatInr(netValue) },
+      { label: 'Estimated Return', value: formatPctNumber(returnPct) }
+    ],
+    [],
+    'Cost basis: ' + formatInr(effectiveInvested) + '. Estimated P&L: ' + formatInr(profit) + '.'
+  );
+}
+
+function isShortFollowup(text) {
+  return /^(same like|same|details|detail|summary|target price|target|break even|breakeven|avg price|average price|quantity|qty|realized only|unrealized only|names only|top \d+|current holdings only)$/i.test(
+    String(text || '').trim()
+  );
+}
+
+function normalizeAnswerPayload(result, fallbackIntent, fallbackDomain) {
+  if (!result) return null;
+  if (typeof result === 'string') {
+    return makeAnswerPayload(result, {
+      resolvedQuery: makeResolvedQuery(
+        fallbackIntent || 'unsupported_query',
+        fallbackDomain || 'conversation',
+        [],
+        null,
+        null,
+        makeConfidence(0.7, 0, 0, 0),
+        'narrative'
+      )
+    });
+  }
+  return result;
+}
+
 function findHoldingFromQuestion(question, context) {
   const holdings =
     context && context.portfolio && Array.isArray(context.portfolio.holdings) ? context.portfolio.holdings : [];
-  const upper = String(question || '').toUpperCase();
-  for (var i = 0; i < holdings.length; i += 1) {
-    var holding = holdings[i];
-    var symbol = normalizeSymbol(holding && holding.symbol);
-    if (!symbol) continue;
-    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
-    if (pattern.test(upper)) return holding;
-  }
-  return null;
+  return resolveBestCandidate(question, holdings, function (holding) {
+    return holding && holding.symbol;
+  });
 }
 
 function findHoldingFromConversation(conversation, context) {
@@ -530,15 +829,9 @@ function getTradeSummaries(context) {
 
 function findTradeSummaryFromQuestion(question, context) {
   var summaries = getTradeSummaries(context);
-  var upper = String(question || '').toUpperCase();
-  for (var i = 0; i < summaries.length; i += 1) {
-    var summary = summaries[i];
-    var symbol = normalizeSymbol(summary && summary.symbol);
-    if (!symbol) continue;
-    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
-    if (pattern.test(upper)) return summary;
-  }
-  return null;
+  return resolveBestCandidate(question, summaries, function (summary) {
+    return summary && summary.symbol;
+  });
 }
 
 function findTradeSummaryFromConversation(conversation, context) {
@@ -572,11 +865,12 @@ function buildMostTradedAnswer(context) {
   );
 }
 
-function buildTopPnlAnswer(context, mode) {
+function buildTopPnlAnswer(context, mode, limit) {
   var source =
     mode === 'winner'
       ? context && context.pnl && Array.isArray(context.pnl.topNetWinners) ? context.pnl.topNetWinners : []
       : context && context.pnl && Array.isArray(context.pnl.topNetLosers) ? context.pnl.topNetLosers : [];
+  var topLimit = Math.max(1, Number(limit || 5));
   if (!source.length) {
     return mode === 'winner'
       ? 'I do not see any net winners in the current app summary.'
@@ -585,7 +879,7 @@ function buildTopPnlAnswer(context, mode) {
   return (
     (mode === 'winner' ? 'Top net winners: ' : 'Top net losers: ') +
     source
-      .slice(0, 5)
+      .slice(0, topLimit)
       .map(function (row) {
         return row.symbol + ' (' + formatInr(row.netPnl) + ')';
       })
@@ -770,14 +1064,10 @@ function buildGreetingAnswer(text) {
 
 function findAllHoldingsFromQuestion(question, context) {
   var holdings = getContextHoldings(context);
-  var upper = String(question || '').toUpperCase();
   var matches = [];
   for (var i = 0; i < holdings.length; i += 1) {
     var holding = holdings[i];
-    var symbol = normalizeSymbol(holding && holding.symbol);
-    if (!symbol) continue;
-    var pattern = new RegExp('(^|[^A-Z0-9])' + escapeRegex(symbol) + '([^A-Z0-9]|$)');
-    if (pattern.test(upper)) matches.push(holding);
+    if (scoreSymbolMatch(question, holding && holding.symbol) >= 80) matches.push(holding);
   }
   return matches;
 }
@@ -850,6 +1140,21 @@ function detectMonthIndex(text) {
 
 function buildDateWindowFromText(text) {
   var now = new Date();
+  var monthRangeMatch = text.match(/last\s+(\d+)\s+months?/);
+  if (monthRangeMatch) {
+    var monthCount = Number(monthRangeMatch[1]);
+    if (Number.isFinite(monthCount) && monthCount > 0) {
+      var rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      rangeStart.setMonth(rangeStart.getMonth() - (monthCount - 1));
+      return {
+        label: 'the last ' + monthCount + ' months',
+        fromDate: isoDateOnly(rangeStart),
+        toDate: isoDateOnly(now),
+        monthKey: null
+      };
+    }
+  }
+
   if (/last 30 days/.test(text)) {
     return {
       label: 'the last 30 days',
@@ -894,6 +1199,300 @@ function buildDateWindowFromText(text) {
       toDate: named.toDate,
       monthKey: named.monthKey
     };
+  }
+
+  return null;
+}
+
+function getPortfolioContext(context) {
+  return context && context.portfolio ? context.portfolio : {};
+}
+
+function classifyHoldingAssetGroup(holding) {
+  var symbol = normalizeSymbol(holding && holding.symbol);
+  var raw = String(holding && holding.symbol || '').toUpperCase();
+  if (/GOLD|GOLDBEES|GOLDIETF|GOLDETf|GOLD ETF/.test(raw) || /GOLD/.test(symbol)) return 'gold';
+  if (/CASH|LIQUID|LIQUIDBEES|MONEY|SAVINGS/.test(raw) || /CASH/.test(symbol) || /LIQUID/.test(symbol)) return 'cash';
+  return 'equity';
+}
+
+function getHoldingsByAssetGroup(context, group) {
+  return getContextHoldings(context).filter(function (holding) {
+    return classifyHoldingAssetGroup(holding) === group;
+  });
+}
+
+function buildCategoryAllocationAnswer(context, groupLabel, holdings) {
+  if (!holdings.length) {
+    return 'I do not see any ' + groupLabel + '-related holdings in your current portfolio.';
+  }
+  var portfolio = getPortfolioContext(context);
+  var invested = holdings.reduce(function (sum, holding) { return sum + Number(holding.invested || 0); }, 0);
+  var currentValue = holdings.reduce(function (sum, holding) { return sum + Number(holding.currentValue || 0); }, 0);
+  var totalCurrentValue = Number(portfolio.currentValue || 0);
+  var allocationPct = totalCurrentValue > 0 ? (currentValue / totalCurrentValue) * 100 : 0;
+  return (
+    groupLabel.charAt(0).toUpperCase() +
+    groupLabel.slice(1) +
+    ' allocation in your current holdings is ' +
+    formatPctNumber(allocationPct).replace('+', '') +
+    ', with invested amount ' +
+    formatInr(invested) +
+    ' and current value ' +
+    formatInr(currentValue) +
+    '. Holdings: ' +
+    holdings.map(function (holding) { return holding.symbol; }).join(', ') +
+    '.'
+  );
+}
+
+function buildSingleHoldingAllocationAnswer(holding) {
+  return (
+    holding.symbol +
+    ' allocation in your current holdings is ' +
+    formatPctNumber(holding.allocationPct).replace('+', '') +
+    '. Invested amount is ' +
+    formatInr(holding.invested) +
+    ' and current value is ' +
+    formatInr(holding.currentValue) +
+    '.'
+  );
+}
+
+function buildTopAllocationRisksAnswer(context) {
+  var holdings = getContextHoldings(context)
+    .slice()
+    .sort(function (a, b) { return Number(b.allocationPct || 0) - Number(a.allocationPct || 0); })
+    .slice(0, 5);
+  if (!holdings.length) {
+    return 'I do not see any current holdings to analyze for allocation risk.';
+  }
+  return (
+    'Top allocation risks in your current holdings: ' +
+    holdings
+      .map(function (holding) {
+        return holding.symbol + ' (' + formatPctNumber(holding.allocationPct).replace('+', '') + ', ' + formatInr(holding.currentValue) + ')';
+      })
+      .join(', ') +
+    '.'
+  );
+}
+
+function buildOpenPositionsAnswer(context) {
+  var holdings = getContextHoldings(context)
+    .slice()
+    .sort(function (a, b) { return Number(b.currentValue || 0) - Number(a.currentValue || 0); });
+  if (!holdings.length) {
+    return 'You do not have any open positions in the app right now.';
+  }
+  return (
+    'Your open positions: ' +
+    holdings
+      .slice(0, 8)
+      .map(function (holding) {
+        return holding.symbol + ' (' + Number(holding.qty || 0) + ' qty, ' + formatInr(holding.currentValue) + ', ' + formatPctNumber(holding.unrealizedPnlPct) + ')';
+      })
+      .join(', ') +
+    '.'
+  );
+}
+
+function buildOpenPositionsAndRiskAnswer(context) {
+  var portfolio = getPortfolioContext(context);
+  return (
+    buildOpenPositionsAnswer(context) +
+    ' ' +
+    'You currently hold ' +
+    Number(portfolio.holdingsCount || 0) +
+    ' stocks. ' +
+    buildTopAllocationRisksAnswer(context)
+  );
+}
+
+function buildPortfolioSummaryAnswer(context, periodLabel) {
+  var portfolio = getPortfolioContext(context);
+  var pnl = context && context.pnl ? context.pnl : {};
+  var topHolding = Array.isArray(portfolio.topHoldings) && portfolio.topHoldings.length ? portfolio.topHoldings[0] : null;
+  var topGainer = getContextHoldings(context)
+    .slice()
+    .sort(function (a, b) { return Number(b.unrealizedPnlPct || 0) - Number(a.unrealizedPnlPct || 0); })[0] || null;
+  return (
+    'Portfolio summary' +
+    (periodLabel ? ' for ' + periodLabel : '') +
+    ': total holdings ' +
+    Number(portfolio.holdingsCount || 0) +
+    ', invested ' +
+    formatInr(portfolio.invested) +
+    ', current value ' +
+    formatInr(portfolio.currentValue) +
+    ', unrealized P&L ' +
+    formatInr(portfolio.unrealizedPnl) +
+    ' (' +
+    formatPctNumber(portfolio.unrealizedPnlPct) +
+    ')' +
+    ', realized P&L ' +
+    formatInr(pnl.realizedPnl) +
+    '. ' +
+    (topHolding ? 'Largest allocation is ' + topHolding.symbol + ' at ' + formatPctNumber(topHolding.allocationPct).replace('+', '') + '. ' : '') +
+    (topGainer ? 'Best current performer is ' + topGainer.symbol + ' at ' + formatPctNumber(topGainer.unrealizedPnlPct) + '.' : '')
+  );
+}
+
+function buildRealizedNamesAnswer(context, mode, window) {
+  var rows = getRealizedHistory(context);
+  if (window) {
+    rows = rows.filter(function (entry) {
+      var date = String(entry && entry.date || '');
+      return date >= window.fromDate && date <= window.toDate;
+    });
+  }
+  var totals = {};
+  rows.forEach(function (entry) {
+    var symbol = normalizeSymbol(entry && entry.symbol);
+    if (!symbol) return;
+    totals[symbol] = (totals[symbol] || 0) + Number(entry && entry.pnl || 0);
+  });
+  var symbols = Object.keys(totals).filter(function (symbol) {
+    return mode === 'profit' ? totals[symbol] > 0 : totals[symbol] < 0;
+  });
+  symbols.sort(function (a, b) {
+    return mode === 'profit' ? totals[b] - totals[a] : totals[a] - totals[b];
+  });
+  if (!symbols.length) {
+    return mode === 'profit'
+      ? 'I do not see any realized profit-making stocks' + (window ? ' for ' + window.label : '') + '.'
+      : 'I do not see any realized loss-making stocks' + (window ? ' for ' + window.label : '') + '.';
+  }
+  return (
+    'Realized ' +
+    (mode === 'profit' ? 'profit' : 'loss') +
+    ' stock names' +
+    (window ? ' for ' + window.label : '') +
+    ': ' +
+    symbols.join(', ') +
+    '.'
+  );
+}
+
+function buildCapabilitiesAnswer() {
+  return 'You can ask me about portfolio summary, open positions, holdings, allocation, top risks, realized and unrealized profit/loss, date-range sell history, most traded stocks, expenses, and sell simulations based on your Finance App data.';
+}
+
+function extractTopLimit(text) {
+  var match = text.match(/top\s+(\d+)/);
+  if (!match) return null;
+  var parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function buildTradeRealizedOnlyAnswer(summary) {
+  return (
+    summary.symbol +
+    ' realized P&L from your transaction history is ' +
+    formatInr(summary.realizedPnl) +
+    ' across ' +
+    Number(summary.sellCount || 0) +
+    ' sell trades.'
+  );
+}
+
+function buildHoldingUnrealizedOnlyAnswer(holding) {
+  return (
+    holding.symbol +
+    ' unrealized P&L in your current holdings is ' +
+    formatInr(holding.unrealizedPnl) +
+    ' (' +
+    formatPctNumber(holding.unrealizedPnlPct) +
+    ') with current value ' +
+    formatInr(holding.currentValue) +
+    '.'
+  );
+}
+
+function getPreviousUserMessages(conversation, currentQuestion) {
+  if (!Array.isArray(conversation) || !conversation.length) return [];
+  var current = String(currentQuestion || '').trim();
+  var currentNormalized = normalizeLooseText(current);
+  var skippedCurrent = false;
+  var messages = [];
+  for (var i = conversation.length - 1; i >= 0; i -= 1) {
+    var row = conversation[i];
+    if (!row || String(row.role || '') !== 'user') continue;
+    var content = String(row.content || '').trim();
+    if (!content) continue;
+    var normalized = normalizeLooseText(content);
+    if (!skippedCurrent && normalized === currentNormalized) {
+      skippedCurrent = true;
+      continue;
+    }
+    messages.push(content);
+  }
+  return messages;
+}
+
+function buildCorrectionFollowupAnswer(question, context, conversation) {
+  var text = String(question || '').trim().toLowerCase();
+  if (!/(^|\b)(no|not that|i mean|realized only|unrealized only|current holdings only|names only|details|summary|top \d+)\b/.test(text)) {
+    return null;
+  }
+
+  var previousMessages = getPreviousUserMessages(conversation, question);
+  var previousQuestion = previousMessages.length ? previousMessages[0] : '';
+  var previousText = String(previousQuestion || '').trim().toLowerCase();
+  if (!previousText) {
+    return 'I may have misunderstood. Tell me the exact metric you want, like realized loss names, current holdings, or stock details.';
+  }
+
+  var previousWindow = buildDateWindowFromText(previousText);
+  var currentWindow = buildDateWindowFromText(text);
+  var activeWindow = currentWindow || previousWindow;
+  var previousHolding = findHoldingFromQuestion(previousQuestion, context) || findHoldingFromConversation(conversation, context);
+  var previousTradeSummary =
+    findTradeSummaryFromQuestion(previousQuestion, context) || findTradeSummaryFromConversation(conversation, context);
+  var topLimit = extractTopLimit(text);
+
+  if (/realized only/.test(text)) {
+    if (/loss/.test(previousText) && /(stock|name|loser)/.test(previousText)) {
+      return buildRealizedNamesAnswer(context, 'loss', activeWindow);
+    }
+    if (/profit|winner/.test(previousText) && /(stock|name|winner)/.test(previousText)) {
+      return buildRealizedNamesAnswer(context, 'profit', activeWindow);
+    }
+    if (previousTradeSummary) return buildTradeRealizedOnlyAnswer(previousTradeSummary);
+    if (activeWindow) return buildProfitLossAnalysisAnswer(context, activeWindow.label, activeWindow.fromDate, activeWindow.toDate);
+    return 'I can show realized results from your transaction history. Tell me the stock name or the date range you want.';
+  }
+
+  if (/unrealized only/.test(text)) {
+    if (previousHolding) return buildHoldingUnrealizedOnlyAnswer(previousHolding);
+    if (/loss/.test(previousText)) return buildFilteredHoldingsAnswer(context, 'loss', null);
+    if (/profit/.test(previousText)) return buildFilteredHoldingsAnswer(context, 'profit', null);
+    return 'I can show unrealized results from your current holdings. Tell me the stock name or the holdings filter you want.';
+  }
+
+  if (/current holdings only/.test(text)) {
+    return buildHoldingsListAnswer(context, false);
+  }
+
+  if (/names only/.test(text)) {
+    if (/realized/.test(previousText) && /loss/.test(previousText)) return buildRealizedNamesAnswer(context, 'loss', activeWindow);
+    if (/realized/.test(previousText) && /profit|winner/.test(previousText)) return buildRealizedNamesAnswer(context, 'profit', activeWindow);
+    if (/holding|portfolio|position/.test(previousText)) return buildHoldingsListAnswer(context, false);
+  }
+
+  if (/top \d+/.test(text)) {
+    if (/loss|loser|worst/.test(previousText)) return buildTopPnlAnswer(context, 'loser', topLimit || 5);
+    if (/winner|gainer|best/.test(previousText)) return buildTopPnlAnswer(context, 'winner', topLimit || 5);
+  }
+
+  if (/(details|summary)/.test(text)) {
+    if (previousHolding) return formatHoldingDetail(previousHolding, context);
+    if (previousTradeSummary) return buildTradeSummaryAnswer(previousTradeSummary);
+    if (/portfolio/.test(previousText)) return buildPortfolioSummaryAnswer(context, activeWindow ? activeWindow.label : 'today');
+  }
+
+  if (/(^|\b)(no|not that|i mean)\b/.test(text)) {
+    return 'I may have misunderstood. You can correct me with a phrase like realized only, unrealized only, names only, top 5, or mention the stock again.';
   }
 
   return null;
@@ -973,15 +1572,910 @@ function buildExpenseCategoryForWindow(context, window) {
     : 'I do not see any expense categories recorded for ' + window.label + '.';
 }
 
+function buildTopHoldingByMetric(context, mode) {
+  var holdings = getContextHoldings(context).slice();
+  if (!holdings.length) return null;
+  if (mode === 'highest_return_percent') {
+    holdings.sort(function (a, b) { return Number(b.unrealizedPnlPct || -999999) - Number(a.unrealizedPnlPct || -999999); });
+  } else if (mode === 'lowest_return_percent' || mode === 'top_loser_unrealized' || mode === 'worst_performer') {
+    holdings.sort(function (a, b) { return Number(a.unrealizedPnlPct || 999999) - Number(b.unrealizedPnlPct || 999999); });
+  } else if (mode === 'highest_invested_holding') {
+    holdings.sort(function (a, b) { return Number(b.invested || 0) - Number(a.invested || 0); });
+  } else if (mode === 'lowest_invested_holding') {
+    holdings.sort(function (a, b) { return Number(a.invested || 0) - Number(b.invested || 0); });
+  } else if (mode === 'top_gainer_unrealized' || mode === 'best_performer') {
+    holdings.sort(function (a, b) { return Number(b.unrealizedPnl || -999999) - Number(a.unrealizedPnl || -999999); });
+  }
+  return holdings[0] || null;
+}
+
+function buildHoldingMetricAnswer(context, mode) {
+  var holding = buildTopHoldingByMetric(context, mode);
+  if (!holding) return 'I do not see any current holdings to analyze.';
+  if (mode === 'highest_return_percent') {
+    return holding.symbol + ' has the highest return percentage in your current holdings at ' + formatPctNumber(holding.unrealizedPnlPct) + '.';
+  }
+  if (mode === 'lowest_return_percent') {
+    return holding.symbol + ' has the lowest return percentage in your current holdings at ' + formatPctNumber(holding.unrealizedPnlPct) + '.';
+  }
+  if (mode === 'highest_invested_holding') {
+    return holding.symbol + ' is your highest invested holding at ' + formatInr(holding.invested) + '.';
+  }
+  if (mode === 'lowest_invested_holding') {
+    return holding.symbol + ' is your lowest invested holding at ' + formatInr(holding.invested) + '.';
+  }
+  if (mode === 'top_gainer_unrealized' || mode === 'best_performer') {
+    return holding.symbol + ' is the top unrealized gainer in your current holdings at ' + formatInr(holding.unrealizedPnl) + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ').';
+  }
+  return holding.symbol + ' is the top unrealized loser in your current holdings at ' + formatInr(holding.unrealizedPnl) + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ').';
+}
+
+function buildTradeSummaryOverviewAnswer(context) {
+  var trades = getTradeContext(context);
+  return (
+    'Trade frequency summary: total trades ' +
+    Number(trades.totalTrades || 0) +
+    ', buy trades ' +
+    Number(trades.buyTrades || 0) +
+    ', sell trades ' +
+    Number(trades.sellTrades || 0) +
+    ', first trade date ' +
+    (trades.firstTradeDate || 'not available') +
+    ', last trade date ' +
+    (trades.lastTradeDate || 'not available') +
+    '.'
+  );
+}
+
+function buildUnrealizedTotalAnswer(context) {
+  var portfolio = getPortfolioContext(context);
+  return 'Total unrealized P&L in your current holdings is ' + formatInr(portfolio.unrealizedPnl) + ' (' + formatPctNumber(portfolio.unrealizedPnlPct) + ').';
+}
+
+function buildRealizedTotalAnswer(context, window) {
+  var realized = getRealizedHistory(context);
+  if (window) {
+    realized = realized.filter(function (entry) {
+      var date = String(entry && entry.date || '');
+      return date >= window.fromDate && date <= window.toDate;
+    });
+  }
+  var total = realized.reduce(function (sum, entry) { return sum + Number(entry && entry.pnl || 0); }, 0);
+  return 'Total realized P&L' + (window ? ' for ' + window.label : '') + ' is ' + formatInr(total) + '.';
+}
+
+function buildRealizedByStockAnswer(summary, window) {
+  if (!summary) return null;
+  return summary.symbol + ' realized P&L from your transaction history' + (window ? ' for ' + window.label : '') + ' is ' + formatInr(summary.realizedPnl) + '.';
+}
+
+function buildUnrealizedByStockAnswer(holding) {
+  if (!holding) return null;
+  return holding.symbol + ' unrealized P&L in your current holdings is ' + formatInr(holding.unrealizedPnl) + ' (' + formatPctNumber(holding.unrealizedPnlPct) + ').';
+}
+
+function buildInvestmentRangeAnswer(context, window) {
+  var finance = getFinanceContext(context);
+  if (!window) {
+    return 'Total investments recorded in your app are ' + formatInr(finance.investments) + '.';
+  }
+  var monthly = Array.isArray(finance.monthlyFlow) ? finance.monthlyFlow : [];
+  var total = monthly.reduce(function (sum, row) {
+    var month = String(row && row.month || '');
+    if (!month) return sum;
+    if (month < window.fromDate.slice(0, 7) || month > window.toDate.slice(0, 7)) return sum;
+    return sum + Number(row && row.investments || 0);
+  }, 0);
+  return 'Your recorded investments for ' + window.label + ' are ' + formatInr(total) + '.';
+}
+
+function buildAllocationClarificationAnswer() {
+  return makeClarificationPayload(
+    'I can help with allocation, but I am not fully sure whether you want a stock allocation, gold allocation, cash allocation, or top allocation risks.',
+    ['Gold allocation in holdings', 'Cash allocation in holdings', 'Top allocation risks', 'DABUR allocation']
+  );
+}
+
+function buildProfitClarificationAnswer(entity) {
+  var name = entity ? entity.symbol : 'that stock';
+  return makeClarificationPayload(
+    'I understood ' + name + ', but I am not fully sure whether you want realized or unrealized profit.',
+    ['Realized only', 'Unrealized only', 'Full details']
+  );
+}
+
+function buildDeterministicAskFinorAnswerV2(question, context, conversation) {
+  var text = String(question || '').trim().toLowerCase();
+  var dateWindow = buildDateWindowFromText(text);
+  var helpQuery = /(what can you do|help|capabilities|what all can i ask|how can you help)/.test(text);
+  var askUnsupported = /(should i buy|should i sell|buy or sell now|market news|live news|tomorrow target|future prediction|price prediction)/.test(text);
+  var askPortfolioSummary = /(portfolio summary|summarize my portfolio|portfolio today summary|summary of my portfolio)/.test(text);
+  var askOpenPositions = /(open positions|open holdings|current open positions)/.test(text);
+  var askTopAllocationRisks = /(top allocation risks|allocation risks|concentration risk|highest allocation risk|risk summary)/.test(text);
+  var askCombinedOpenPositionsRisk = askOpenPositions && askTopAllocationRisks;
+  var askGoldAllocation = /(gold allocation|gold holdings|gold in holdings)/.test(text);
+  var askCashAllocation = /(cash allocation|cash in holdings|cash holdings)/.test(text);
+  var askAssetAllocation = /(asset allocation|equity allocation|gold allocation|cash allocation)/.test(text);
+  var askAllocationQuery = /(allocation|allocation percentage|allocation %)/.test(text);
+  var askHoldingsList = /(all stock names|all holdings|current holdings|current holding stocks list|list holdings|holding names|holding list|which stocks do i have)/.test(text);
+  var askNamesOnly = /(stock names|holding names|list of stocks|symbol names|names only)/.test(text);
+  var askRealizedLossNames = /(realized loss stock names|loss stock names|stocks in realized loss|realized losers)/.test(text);
+  var askRealizedProfitNames = /(realized profit stock names|profit stock names|stocks in realized profit|realized winners)/.test(text);
+  var askMostTraded = /(most traded stock|most traded symbol|which stock did i trade most|top traded stock)/.test(text);
+  var askTradeFrequencySummary = /(trade frequency|trading activity|trade summary overall|how many trades)/.test(text) && !askMostTraded;
+  var askCurrentMonthInvestment = /(current month investment|investment this month|this month investment)/.test(text);
+  var askInvestmentRange = dateWindow !== null && /(investment|invested)/.test(text) && !/(holding|allocation)/.test(text);
+  var askTopWinners = /(top winners|top winner|best performers|best performing stocks|top gainers)/.test(text);
+  var askTopLosers = /(top losers|top loser|worst performers|worst performing stocks|top loss makers|top lossmakers|top \d+ losses|top losses)/.test(text);
+  var askHighestReturn = /(highest return percent|highest return %|best return percent|which stock having highest return percent)/.test(text);
+  var askLowestReturn = /(lowest return percent|lowest return %|worst return percent)/.test(text);
+  var askHighestInvested = /(highest invested holding|highest investment holding|most invested stock)/.test(text);
+  var askLowestInvested = /(lowest invested holding|lowest investment holding|least invested stock)/.test(text);
+  var askUnrealizedTotal = /(unrealized pnl total|unrealized p&l total|total unrealized|overall unrealized)/.test(text);
+  var askRealizedTotal = /(realized pnl total|realized p&l total|total realized|overall realized|booked pnl total)/.test(text);
+  var askProfitLossAnalysis = dateWindow !== null && /(profit\s*\/\s*loss|profit and loss|p&l|analysis|how much profit|how much loss)/.test(text);
+  var askBiggestExpenseThisMonth = /(biggest expense category this month|highest expense category this month|top expense category this month|biggest expenses this month|highest expenses this month)/.test(text);
+  var topLimit = extractTopLimit(text) || 5;
+  var explicitHolding = findHoldingFromQuestion(question, context);
+  var explicitTradeSummary = findTradeSummaryFromQuestion(question, context);
+  var allowConversationCarry = isShortFollowup(text);
+  var holding = explicitHolding || (allowConversationCarry ? findHoldingFromConversation(conversation, context) : null);
+  var tradeSummary = explicitTradeSummary || (allowConversationCarry ? findTradeSummaryFromConversation(conversation, context) : null);
+  var comparisonHoldings = findAllHoldingsFromQuestion(question, context);
+  var holdingEntities = holding ? [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.98 : 0.72)] : [];
+  var tradeEntities = tradeSummary ? [makeResolvedEntity(tradeSummary.symbol, 'stock', explicitTradeSummary ? 0.98 : 0.72)] : [];
+
+  if (askUnsupported) {
+    return makeAnswerPayload(
+      'I can analyze only your Finance App data. I cannot give live market advice, news-based calls, or future price predictions.',
+      {
+        answerKind: 'clarification',
+        cards: [makeCard('clarification', 'Unsupported for Finor', [], ['Portfolio summary', 'Holdings analysis', 'Realized P&L', 'Sell simulation'], 'Finor stays analytical and data-based.')],
+        resolvedQuery: makeResolvedQuery('unsupported_query', 'conversation', [], dateWindow, null, makeConfidence(0.98, 0, 0.3, 1), 'clarification')
+      }
+    );
+  }
+
+  if (helpQuery) {
+    return makeAnswerPayload(buildCapabilitiesAnswer(), {
+      answerKind: 'narrative',
+      resolvedQuery: makeResolvedQuery('help_or_capabilities', 'conversation', [], null, null, makeConfidence(0.99, 0, 0, 1), 'narrative')
+    });
+  }
+
+  if (askCombinedOpenPositionsRisk) {
+    return makeAnswerPayload(buildOpenPositionsAndRiskAnswer(context), {
+      answerKind: 'portfolio_summary',
+      cards: [
+        buildRankingCard('Open positions', getContextHoldings(context).slice(0, 8).map(function (row) {
+          return row.symbol + ' (' + Number(row.qty || 0) + ' qty)';
+        })),
+        buildRankingCard('Top allocation risks', getContextHoldings(context).slice().sort(function (a, b) {
+          return Number(b.allocationPct || 0) - Number(a.allocationPct || 0);
+        }).slice(0, 5).map(function (row) {
+          return row.symbol + ' (' + formatPctNumber(row.allocationPct).replace('+', '') + ')';
+        }))
+      ],
+      resolvedQuery: makeResolvedQuery('open_positions', 'holdings', [], null, 'allocation_pct', makeConfidence(0.98, 0, 0, 0.96), 'summary')
+    });
+  }
+
+  if (askPortfolioSummary) {
+    return makeAnswerPayload(buildPortfolioSummaryAnswer(context, dateWindow ? dateWindow.label : 'today'), {
+      answerKind: 'portfolio_summary',
+      cards: [buildPortfolioSummaryCard(context)],
+      resolvedQuery: makeResolvedQuery('portfolio_summary', 'portfolio', [], dateWindow, 'portfolio_summary', makeConfidence(0.98, 0, dateWindow ? 0.9 : 0, 0.96), 'summary')
+    });
+  }
+
+  if (askOpenPositions) {
+    return makeAnswerPayload(buildOpenPositionsAnswer(context), {
+      answerKind: 'list',
+      cards: [buildRankingCard('Open positions', getContextHoldings(context).slice(0, 8).map(function (row) {
+        return row.symbol + ' (' + Number(row.qty || 0) + ' qty, ' + formatInr(row.currentValue) + ')';
+      }))],
+      resolvedQuery: makeResolvedQuery('open_positions', 'holdings', [], null, 'current_value', makeConfidence(0.97, 0, 0, 0.92), 'list')
+    });
+  }
+
+  if (askTopAllocationRisks) {
+    return makeAnswerPayload(buildTopAllocationRisksAnswer(context), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Top allocation risks', getContextHoldings(context).slice().sort(function (a, b) {
+        return Number(b.allocationPct || 0) - Number(a.allocationPct || 0);
+      }).slice(0, 5).map(function (row) {
+        return row.symbol + ' (' + formatPctNumber(row.allocationPct).replace('+', '') + ')';
+      }))],
+      resolvedQuery: makeResolvedQuery('top_allocation_risks', 'portfolio', [], null, 'allocation_pct', makeConfidence(0.98, 0, 0, 0.95), 'ranking')
+    });
+  }
+
+  if (askGoldAllocation) {
+    var goldHoldings = getHoldingsByAssetGroup(context, 'gold');
+    return makeAnswerPayload(buildCategoryAllocationAnswer(context, 'gold', goldHoldings), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Gold allocation', goldHoldings.map(function (row) { return row.symbol + ' (' + formatPctNumber(row.allocationPct).replace('+', '') + ')'; }))],
+      resolvedQuery: makeResolvedQuery('gold_allocation_query', 'portfolio', [makeResolvedEntity('gold', 'category', 0.99)], null, 'allocation_pct', makeConfidence(0.99, 0.99, 0, 0.96), 'summary')
+    });
+  }
+
+  if (askCashAllocation) {
+    var cashHoldings = getHoldingsByAssetGroup(context, 'cash');
+    return makeAnswerPayload(buildCategoryAllocationAnswer(context, 'cash', cashHoldings), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Cash allocation', cashHoldings.map(function (row) { return row.symbol + ' (' + formatPctNumber(row.allocationPct).replace('+', '') + ')'; }))],
+      resolvedQuery: makeResolvedQuery('cash_allocation_query', 'portfolio', [makeResolvedEntity('cash', 'category', 0.99)], null, 'allocation_pct', makeConfidence(0.99, 0.99, 0, 0.96), 'summary')
+    });
+  }
+
+  if (askAssetAllocation && !explicitHolding) {
+    return makeAnswerPayload(
+      [
+        buildCategoryAllocationAnswer(context, 'equity', getHoldingsByAssetGroup(context, 'equity')),
+        buildCategoryAllocationAnswer(context, 'gold', getHoldingsByAssetGroup(context, 'gold')),
+        buildCategoryAllocationAnswer(context, 'cash', getHoldingsByAssetGroup(context, 'cash'))
+      ].join(' '),
+      {
+        answerKind: 'portfolio_summary',
+        cards: [buildRankingCard('Asset allocation', [
+          'Equity: ' + getHoldingsByAssetGroup(context, 'equity').length + ' holdings',
+          'Gold: ' + getHoldingsByAssetGroup(context, 'gold').length + ' holdings',
+          'Cash: ' + getHoldingsByAssetGroup(context, 'cash').length + ' holdings'
+        ])],
+        resolvedQuery: makeResolvedQuery('asset_allocation_query', 'portfolio', [], null, 'allocation_pct', makeConfidence(0.97, 0.7, 0, 0.94), 'summary')
+      }
+    );
+  }
+
+  if (askAllocationQuery && !explicitHolding && !askGoldAllocation && !askCashAllocation && !askAssetAllocation && !askTopAllocationRisks) {
+    return buildAllocationClarificationAnswer();
+  }
+
+  if (askRealizedLossNames) {
+    var realizedLossText = buildRealizedNamesAnswer(context, 'loss', dateWindow);
+    var realizedLossRows = getRealizedHistory(context);
+    if (dateWindow) {
+      realizedLossRows = realizedLossRows.filter(function (entry) {
+        var date = String(entry && entry.date || '');
+        return date >= dateWindow.fromDate && date <= dateWindow.toDate;
+      });
+    }
+    var realizedLossTotals = {};
+    realizedLossRows.forEach(function (entry) {
+      var symbol = normalizeSymbol(entry && entry.symbol);
+      var pnl = Number(entry && entry.pnl || 0);
+      if (!symbol || !(pnl < 0)) return;
+      realizedLossTotals[symbol] = (realizedLossTotals[symbol] || 0) + pnl;
+    });
+    var realizedLossItems = Object.keys(realizedLossTotals)
+      .sort(function (a, b) { return realizedLossTotals[a] - realizedLossTotals[b]; })
+      .slice(0, topLimit)
+      .map(function (symbol) {
+        return symbol + ' (' + formatInr(realizedLossTotals[symbol]) + ')';
+      });
+    return makeAnswerPayload(realizedLossText, {
+      answerKind: 'list',
+      cards: [buildRankingCard('Realized loss names' + (dateWindow ? ' for ' + dateWindow.label : ''), realizedLossItems)],
+      resolvedQuery: makeResolvedQuery(
+        'realized_loss_stock_names',
+        'trades',
+        [],
+        dateWindow,
+        'realized_pnl',
+        makeConfidence(0.99, 0.82, dateWindow ? 0.94 : 0, 0.98),
+        'list'
+      )
+    });
+  }
+
+  if (askRealizedProfitNames) {
+    var realizedProfitText = buildRealizedNamesAnswer(context, 'profit', dateWindow);
+    var realizedProfitRows = getRealizedHistory(context);
+    if (dateWindow) {
+      realizedProfitRows = realizedProfitRows.filter(function (entry) {
+        var date = String(entry && entry.date || '');
+        return date >= dateWindow.fromDate && date <= dateWindow.toDate;
+      });
+    }
+    var realizedProfitTotals = {};
+    realizedProfitRows.forEach(function (entry) {
+      var symbol = normalizeSymbol(entry && entry.symbol);
+      var pnl = Number(entry && entry.pnl || 0);
+      if (!symbol || !(pnl > 0)) return;
+      realizedProfitTotals[symbol] = (realizedProfitTotals[symbol] || 0) + pnl;
+    });
+    var realizedProfitItems = Object.keys(realizedProfitTotals)
+      .sort(function (a, b) { return realizedProfitTotals[b] - realizedProfitTotals[a]; })
+      .slice(0, topLimit)
+      .map(function (symbol) {
+        return symbol + ' (' + formatInr(realizedProfitTotals[symbol]) + ')';
+      });
+    return makeAnswerPayload(realizedProfitText, {
+      answerKind: 'list',
+      cards: [buildRankingCard('Realized profit names' + (dateWindow ? ' for ' + dateWindow.label : ''), realizedProfitItems)],
+      resolvedQuery: makeResolvedQuery(
+        'realized_profit_stock_names',
+        'trades',
+        [],
+        dateWindow,
+        'realized_pnl',
+        makeConfidence(0.99, 0.82, dateWindow ? 0.94 : 0, 0.98),
+        'list'
+      )
+    });
+  }
+
+  if (askHoldingsList) {
+    return makeAnswerPayload(buildHoldingsListAnswer(context, !askNamesOnly), {
+      answerKind: 'list',
+      cards: [buildRankingCard(
+        askNamesOnly ? 'Holding symbols' : 'Current holdings',
+        getContextHoldings(context)
+          .slice()
+          .sort(function (a, b) { return Number(b.currentValue || 0) - Number(a.currentValue || 0); })
+          .slice(0, 10)
+          .map(function (row) {
+            return askNamesOnly ? row.symbol : row.symbol + ' (' + Number(row.qty || 0) + ' qty)';
+          })
+      )],
+      resolvedQuery: makeResolvedQuery(
+        'holdings_list',
+        'holdings',
+        [],
+        null,
+        askNamesOnly ? 'symbols' : 'current_positions',
+        makeConfidence(0.98, 0.4, 0, 0.95),
+        'list'
+      )
+    });
+  }
+
+  if (askMostTraded) {
+    return makeAnswerPayload(buildMostTradedAnswer(context), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Most traded stocks', getTradeSummaries(context).slice(0, Math.max(3, topLimit)).map(function (row) {
+        return row.symbol + ' (' + Number(row.tradeCount || 0) + ' trades)';
+      }))],
+      resolvedQuery: makeResolvedQuery(
+        'most_traded_stock',
+        'trades',
+        [],
+        null,
+        'trade_count',
+        makeConfidence(0.98, 0.72, 0, 0.97),
+        'ranking'
+      )
+    });
+  }
+
+  if (askTradeFrequencySummary) {
+    return makeAnswerPayload(buildTradeSummaryOverviewAnswer(context), {
+      answerKind: 'narrative',
+      cards: [makeCard('portfolio_summary', 'Trade frequency', [
+        { label: 'Total trades', value: String(Number(getTradeContext(context).totalTrades || 0)) },
+        { label: 'Buy trades', value: String(Number(getTradeContext(context).buyTrades || 0)) },
+        { label: 'Sell trades', value: String(Number(getTradeContext(context).sellTrades || 0)) }
+      ], [], 'From your transaction history.')],
+      resolvedQuery: makeResolvedQuery(
+        'trade_frequency_summary',
+        'trades',
+        [],
+        null,
+        'trade_count',
+        makeConfidence(0.96, 0.55, 0, 0.94),
+        'summary'
+      )
+    });
+  }
+
+  if (askTopWinners) {
+    return makeAnswerPayload(buildTopPnlAnswer(context, 'winner', topLimit), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Top net winners', (context && context.pnl && Array.isArray(context.pnl.topNetWinners) ? context.pnl.topNetWinners : [])
+        .slice(0, topLimit)
+        .map(function (row) { return row.symbol + ' (' + formatInr(row.netPnl) + ')'; }))],
+      resolvedQuery: makeResolvedQuery(
+        'top_5_gainers',
+        'trades',
+        [],
+        null,
+        'net_pnl',
+        makeConfidence(0.97, 0.72, 0, 0.96),
+        'ranking'
+      )
+    });
+  }
+
+  if (askTopLosers) {
+    return makeAnswerPayload(buildTopPnlAnswer(context, 'loser', topLimit), {
+      answerKind: 'ranking',
+      cards: [buildRankingCard('Top net losers', (context && context.pnl && Array.isArray(context.pnl.topNetLosers) ? context.pnl.topNetLosers : [])
+        .slice(0, topLimit)
+        .map(function (row) { return row.symbol + ' (' + formatInr(row.netPnl) + ')'; }))],
+      resolvedQuery: makeResolvedQuery(
+        'top_5_losers',
+        'trades',
+        [],
+        null,
+        'net_pnl',
+        makeConfidence(0.97, 0.72, 0, 0.96),
+        'ranking'
+      )
+    });
+  }
+
+  if (askHighestReturn) {
+    var highestReturnHolding = buildTopHoldingByMetric(context, 'highest_return_percent');
+    return makeAnswerPayload(buildHoldingMetricAnswer(context, 'highest_return_percent'), {
+      answerKind: 'ranking',
+      cards: highestReturnHolding ? [buildHoldingDetailCard(highestReturnHolding)] : [],
+      resolvedQuery: makeResolvedQuery(
+        'highest_return_percent',
+        'holdings',
+        highestReturnHolding ? [makeResolvedEntity(highestReturnHolding.symbol, 'stock', 0.96)] : [],
+        null,
+        'return_pct',
+        makeConfidence(0.98, highestReturnHolding ? 0.96 : 0.2, 0, 0.98),
+        'ranking'
+      )
+    });
+  }
+
+  if (askLowestReturn) {
+    var lowestReturnHolding = buildTopHoldingByMetric(context, 'lowest_return_percent');
+    return makeAnswerPayload(buildHoldingMetricAnswer(context, 'lowest_return_percent'), {
+      answerKind: 'ranking',
+      cards: lowestReturnHolding ? [buildHoldingDetailCard(lowestReturnHolding)] : [],
+      resolvedQuery: makeResolvedQuery(
+        'lowest_return_percent',
+        'holdings',
+        lowestReturnHolding ? [makeResolvedEntity(lowestReturnHolding.symbol, 'stock', 0.96)] : [],
+        null,
+        'return_pct',
+        makeConfidence(0.98, lowestReturnHolding ? 0.96 : 0.2, 0, 0.98),
+        'ranking'
+      )
+    });
+  }
+
+  if (askHighestInvested) {
+    var highestInvestedHolding = buildTopHoldingByMetric(context, 'highest_invested_holding');
+    return makeAnswerPayload(buildHoldingMetricAnswer(context, 'highest_invested_holding'), {
+      answerKind: 'ranking',
+      cards: highestInvestedHolding ? [buildHoldingDetailCard(highestInvestedHolding)] : [],
+      resolvedQuery: makeResolvedQuery(
+        'highest_invested_holding',
+        'holdings',
+        highestInvestedHolding ? [makeResolvedEntity(highestInvestedHolding.symbol, 'stock', 0.96)] : [],
+        null,
+        'invested',
+        makeConfidence(0.98, highestInvestedHolding ? 0.96 : 0.2, 0, 0.97),
+        'ranking'
+      )
+    });
+  }
+
+  if (askLowestInvested) {
+    var lowestInvestedHolding = buildTopHoldingByMetric(context, 'lowest_invested_holding');
+    return makeAnswerPayload(buildHoldingMetricAnswer(context, 'lowest_invested_holding'), {
+      answerKind: 'ranking',
+      cards: lowestInvestedHolding ? [buildHoldingDetailCard(lowestInvestedHolding)] : [],
+      resolvedQuery: makeResolvedQuery(
+        'lowest_invested_holding',
+        'holdings',
+        lowestInvestedHolding ? [makeResolvedEntity(lowestInvestedHolding.symbol, 'stock', 0.96)] : [],
+        null,
+        'invested',
+        makeConfidence(0.98, lowestInvestedHolding ? 0.96 : 0.2, 0, 0.97),
+        'ranking'
+      )
+    });
+  }
+
+  if (askUnrealizedTotal) {
+    return makeAnswerPayload(buildUnrealizedTotalAnswer(context), {
+      answerKind: 'portfolio_summary',
+      cards: [buildPortfolioSummaryCard(context)],
+      resolvedQuery: makeResolvedQuery(
+        'unrealized_pnl_total',
+        'holdings',
+        [],
+        null,
+        'unrealized_pnl',
+        makeConfidence(0.98, 0.4, 0, 0.97),
+        'summary'
+      )
+    });
+  }
+
+  if (askRealizedTotal) {
+    return makeAnswerPayload(buildRealizedTotalAnswer(context, dateWindow), {
+      answerKind: 'portfolio_summary',
+      cards: [buildPortfolioSummaryCard(context)],
+      resolvedQuery: makeResolvedQuery(
+        'realized_pnl_total',
+        'trades',
+        [],
+        dateWindow,
+        'realized_pnl',
+        makeConfidence(0.98, 0.4, dateWindow ? 0.94 : 0, 0.97),
+        'summary'
+      )
+    });
+  }
+
+  if (askCurrentMonthInvestment) {
+    var currentMonthWindow = dateWindow || buildDateWindowFromText('this month');
+    return makeAnswerPayload(buildInvestmentRangeAnswer(context, currentMonthWindow), {
+      answerKind: 'portfolio_summary',
+      cards: [makeCard('portfolio_summary', 'Current month investment', [
+        { label: 'Period', value: currentMonthWindow ? currentMonthWindow.label : 'this month' },
+        { label: 'Investments', value: buildInvestmentRangeAnswer(context, currentMonthWindow).replace(/^Your recorded investments for [^.]+ are /, '').replace(/\.$/, '') }
+      ], [], 'Based on your recorded monthly flow.')],
+      resolvedQuery: makeResolvedQuery(
+        'current_month_investment',
+        'finance',
+        [],
+        currentMonthWindow,
+        'investments',
+        makeConfidence(0.97, 0.4, 0.95, 0.96),
+        'summary'
+      )
+    });
+  }
+
+  if (askInvestmentRange) {
+    return makeAnswerPayload(buildInvestmentRangeAnswer(context, dateWindow), {
+      answerKind: 'portfolio_summary',
+      cards: [makeCard('portfolio_summary', 'Investment summary', [
+        { label: 'Period', value: dateWindow ? dateWindow.label : 'all time' },
+        { label: 'Investments', value: buildInvestmentRangeAnswer(context, dateWindow).replace(/^Your recorded investments(?: for [^.]+)? are /, '').replace(/\.$/, '') }
+      ], [], 'Based on your recorded monthly flow.')],
+      resolvedQuery: makeResolvedQuery(
+        dateWindow ? 'date_range_investment' : 'current_month_investment',
+        'finance',
+        [],
+        dateWindow,
+        'investments',
+        makeConfidence(0.96, 0.4, dateWindow ? 0.94 : 0.6, 0.95),
+        'summary'
+      )
+    });
+  }
+
+  if (askBiggestExpenseThisMonth) {
+    return makeAnswerPayload(buildExpenseCategoryAnswer(context, true), {
+      answerKind: 'narrative',
+      cards: [makeCard('ranking', 'Top expense category this month', [], [buildExpenseCategoryAnswer(context, true).replace(/^Your biggest expense category this month is /, '').replace(/\.$/, '')], 'From your recorded transaction data.')],
+      resolvedQuery: makeResolvedQuery(
+        'date_range_investment',
+        'finance',
+        [],
+        buildDateWindowFromText('this month'),
+        'expense_category',
+        makeConfidence(0.97, 0.45, 0.96, 0.93),
+        'summary'
+      )
+    });
+  }
+
+  if (askProfitLossAnalysis) {
+    return makeAnswerPayload(
+      buildProfitLossAnalysisAnswer(context, dateWindow ? dateWindow.label : 'the selected period', dateWindow ? dateWindow.fromDate : '', dateWindow ? dateWindow.toDate : ''),
+      {
+        answerKind: 'portfolio_summary',
+        cards: [makeCard('portfolio_summary', 'Booked profit/loss', [
+          { label: 'Range', value: dateWindow ? dateWindow.label : 'selected period' },
+          { label: 'Trades', value: String(getRealizedHistory(context).filter(function (entry) {
+            if (!dateWindow) return true;
+            var date = String(entry && entry.date || '');
+            return date >= dateWindow.fromDate && date <= dateWindow.toDate;
+          }).length) }
+        ], [], 'Calculated from your recorded sell history.')],
+        resolvedQuery: makeResolvedQuery(
+          'date_range_realized_pnl',
+          'trades',
+          [],
+          dateWindow,
+          'realized_pnl',
+          makeConfidence(0.96, 0.45, dateWindow ? 0.95 : 0.3, 0.95),
+          'summary'
+        )
+      }
+    );
+  }
+
+  var askComparison = /(vs|compare|comparison)/.test(text) && comparisonHoldings.length >= 2;
+  var askTarget = /(target price|target sell price|sell price|exit price)/.test(text);
+  var askBreakEven = /(break even|breakeven)/.test(text);
+  var askAveragePrice = /(average price|avg price|avg buy|average buy|buy average)/.test(text);
+  var askQuantityOnly = /(how much quantity|quantity do i have|qty do i have|shares do i have)/.test(text);
+  var askRecentTrades = /(recent trades|recent activity|trade details|trade summary)/.test(text) && !askTradeFrequencySummary;
+  var askHoldingSummary = /(holding summary|stock details|full stock details|full details|active holding trade details|summary details|holding details|position details)/.test(text);
+  var askRealizedOnlyMetric = /realized only/.test(text);
+  var askUnrealizedOnlyMetric = /unrealized only/.test(text);
+  var sellPrice = resolveSellPriceFromQuestion(text, holding);
+  var askWhatIfSell = sellPrice !== null && /(if i sell|if sold|sell at|sold at|profit i will get|how much profit|how much percent return)/.test(text);
+  var askChargesEstimation = /(charges estimation|charges estimate|estimated charges|charges if i sell)/.test(text) && sellPrice !== null;
+
+  if (askComparison) {
+    return makeAnswerPayload(buildHoldingComparisonAnswer(comparisonHoldings), {
+      answerKind: 'ranking',
+      cards: comparisonHoldings.slice(0, 2).map(function (row) { return buildHoldingDetailCard(row); }),
+      resolvedQuery: makeResolvedQuery(
+        'compare_holdings',
+        'holdings',
+        comparisonHoldings.slice(0, 2).map(function (row) { return makeResolvedEntity(row.symbol, 'stock', 0.95); }),
+        null,
+        'comparison',
+        makeConfidence(0.97, 0.96, 0, 0.94),
+        'detail'
+      )
+    });
+  }
+
+  if (askWhatIfSell && holding && sellPrice !== null) {
+    return makeAnswerPayload(buildWhatIfSellAnswer(holding, context, sellPrice), {
+      answerKind: 'simulation',
+      cards: [buildSimulationCard(holding, context, sellPrice)],
+      resolvedQuery: makeResolvedQuery(
+        'sell_simulation',
+        'simulation',
+        [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+        null,
+        'sell_price',
+        makeConfidence(0.98, explicitHolding ? 0.99 : 0.75, 0, 0.98),
+        'simulation'
+      )
+    });
+  }
+
+  if (askChargesEstimation && holding && sellPrice !== null) {
+    var qty = Number(holding.qty || 0);
+    var grossValue = qty * sellPrice;
+    var sellRate = Number(context && context.settings ? context.settings.sellBrokeragePct || 0 : 0);
+    var dpCharge = Number(context && context.settings ? context.settings.dpCharge || 0 : 0);
+    var estimatedCharges = grossValue * (sellRate / 100) + dpCharge;
+    return makeAnswerPayload(
+      'Estimated sell charges for ' + holding.symbol + ' at ' + formatInr(sellPrice) + ' per share are about ' + formatInr(estimatedCharges) + '.',
+      {
+        answerKind: 'simulation',
+        cards: [buildSimulationCard(holding, context, sellPrice)],
+        resolvedQuery: makeResolvedQuery(
+          'charges_estimation',
+          'simulation',
+          [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+          null,
+          'charges',
+          makeConfidence(0.97, explicitHolding ? 0.99 : 0.75, 0, 0.95),
+          'simulation'
+        )
+      }
+    );
+  }
+
+  if (askTarget && holding) {
+    return makeAnswerPayload(
+      holding.symbol +
+      ' target sell price is ' +
+      formatInr(holding.targetSellPrice) +
+      ' per share. Break-even sell price is ' +
+      formatInr(holding.breakEvenSellPrice) +
+      '.',
+      {
+        answerKind: 'holding_detail',
+        cards: [buildHoldingDetailCard(holding)],
+        resolvedQuery: makeResolvedQuery(
+          'holding_summary',
+          'holdings',
+          [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+          null,
+          'target_sell_price',
+          makeConfidence(0.98, explicitHolding ? 0.99 : 0.75, 0, 0.97),
+          'detail'
+        )
+      }
+    );
+  }
+
+  if (askBreakEven && holding) {
+    return makeAnswerPayload(
+      holding.symbol +
+      ' break-even sell price is ' +
+      formatInr(holding.breakEvenSellPrice) +
+      ' per share. Your current target sell price is ' +
+      formatInr(holding.targetSellPrice) +
+      '.',
+      {
+        answerKind: 'holding_detail',
+        cards: [buildHoldingDetailCard(holding)],
+        resolvedQuery: makeResolvedQuery(
+          'break_even_query',
+          'simulation',
+          [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+          null,
+          'break_even',
+          makeConfidence(0.98, explicitHolding ? 0.99 : 0.75, 0, 0.97),
+          'detail'
+        )
+      }
+    );
+  }
+
+  if (askAveragePrice && holding) {
+    return makeAnswerPayload(
+      holding.symbol + ' average buy price in your current holdings is ' + formatInr(holding.avgBuy) + '.',
+      {
+        answerKind: 'holding_detail',
+        cards: [buildHoldingDetailCard(holding)],
+        resolvedQuery: makeResolvedQuery(
+          'holding_summary',
+          'holdings',
+          [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+          null,
+          'avg_buy',
+          makeConfidence(0.98, explicitHolding ? 0.99 : 0.75, 0, 0.97),
+          'detail'
+        )
+      }
+    );
+  }
+
+  if (askQuantityOnly && holding) {
+    return makeAnswerPayload(
+      'You currently hold ' + Number(holding.qty || 0) + ' shares of ' + holding.symbol + '.',
+      {
+        answerKind: 'holding_detail',
+        cards: [buildHoldingDetailCard(holding)],
+        resolvedQuery: makeResolvedQuery(
+          'holding_summary',
+          'holdings',
+          [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+          null,
+          'quantity',
+          makeConfidence(0.97, explicitHolding ? 0.99 : 0.75, 0, 0.96),
+          'detail'
+        )
+      }
+    );
+  }
+
+  if (askRecentTrades && tradeSummary) {
+    return makeAnswerPayload(buildRecentTradesAnswer(tradeSummary, context), {
+      answerKind: 'list',
+      cards: [buildRankingCard('Recent trades for ' + tradeSummary.symbol, [
+        'Trade count: ' + Number(tradeSummary.tradeCount || 0),
+        'Buy qty: ' + Number(tradeSummary.buyQty || 0),
+        'Sell qty: ' + Number(tradeSummary.sellQty || 0),
+        'Net P&L: ' + formatInr(tradeSummary.netPnl)
+      ])],
+      resolvedQuery: makeResolvedQuery(
+        'realized_pnl_by_stock',
+        'trades',
+        [makeResolvedEntity(tradeSummary.symbol, 'stock', explicitTradeSummary ? 0.99 : 0.75)],
+        dateWindow,
+        'trade_history',
+        makeConfidence(0.96, explicitTradeSummary ? 0.99 : 0.75, dateWindow ? 0.9 : 0, 0.93),
+        'list'
+      )
+    });
+  }
+
+  if (askRealizedOnlyMetric && tradeSummary) {
+    return makeAnswerPayload(buildTradeRealizedOnlyAnswer(tradeSummary), {
+      answerKind: 'holding_detail',
+      cards: [buildRankingCard('Realized P&L for ' + tradeSummary.symbol, [
+        'Sell trades: ' + Number(tradeSummary.sellCount || 0),
+        'Realized P&L: ' + formatInr(tradeSummary.realizedPnl)
+      ])],
+      resolvedQuery: makeResolvedQuery(
+        'realized_pnl_by_stock',
+        'trades',
+        [makeResolvedEntity(tradeSummary.symbol, 'stock', explicitTradeSummary ? 0.99 : 0.75)],
+        dateWindow,
+        'realized_pnl',
+        makeConfidence(0.97, explicitTradeSummary ? 0.99 : 0.75, dateWindow ? 0.85 : 0, 0.96),
+        'detail'
+      )
+    });
+  }
+
+  if (askUnrealizedOnlyMetric && holding) {
+    return makeAnswerPayload(buildHoldingUnrealizedOnlyAnswer(holding), {
+      answerKind: 'holding_detail',
+      cards: [buildHoldingDetailCard(holding)],
+      resolvedQuery: makeResolvedQuery(
+        'unrealized_pnl_by_stock',
+        'holdings',
+        [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+        null,
+        'unrealized_pnl',
+        makeConfidence(0.97, explicitHolding ? 0.99 : 0.75, 0, 0.96),
+        'detail'
+      )
+    });
+  }
+
+  if (holding && /(realized profit|realized pnl|booked pnl|booked profit|booked loss)/.test(text) && !/(unrealized|holding|current value|allocation|avg)/.test(text)) {
+    if (tradeSummary) {
+      return makeAnswerPayload(buildRealizedByStockAnswer(tradeSummary, dateWindow), {
+        answerKind: 'holding_detail',
+        cards: [buildRankingCard('Realized P&L for ' + tradeSummary.symbol, [
+          'Sell trades: ' + Number(tradeSummary.sellCount || 0),
+          'Realized P&L: ' + formatInr(tradeSummary.realizedPnl)
+        ])],
+        resolvedQuery: makeResolvedQuery(
+          'realized_pnl_by_stock',
+          'trades',
+          [makeResolvedEntity(tradeSummary.symbol, 'stock', explicitTradeSummary ? 0.99 : 0.75)],
+          dateWindow,
+          'realized_pnl',
+          makeConfidence(0.96, explicitTradeSummary ? 0.99 : 0.75, dateWindow ? 0.85 : 0, 0.95),
+          'detail'
+        )
+      });
+    }
+    return buildProfitClarificationAnswer(holding);
+  }
+
+  if (holding && /(unrealized profit|unrealized pnl|current profit|current loss|profit in current holdings)/.test(text)) {
+    return makeAnswerPayload(buildUnrealizedByStockAnswer(holding), {
+      answerKind: 'holding_detail',
+      cards: [buildHoldingDetailCard(holding)],
+      resolvedQuery: makeResolvedQuery(
+        'unrealized_pnl_by_stock',
+        'holdings',
+        [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+        null,
+        'unrealized_pnl',
+        makeConfidence(0.96, explicitHolding ? 0.99 : 0.75, 0, 0.95),
+        'detail'
+      )
+    });
+  }
+
+  if (holding && (askHoldingSummary || /(holding|position|ltp|current value|invested amount|allocation)/.test(text))) {
+    return makeAnswerPayload(formatHoldingDetail(holding, context), {
+      answerKind: 'holding_detail',
+      cards: [buildHoldingDetailCard(holding)],
+      resolvedQuery: makeResolvedQuery(
+        'holding_summary',
+        'holdings',
+        [makeResolvedEntity(holding.symbol, 'stock', explicitHolding ? 0.99 : 0.75)],
+        null,
+        'holding_snapshot',
+        makeConfidence(0.95, explicitHolding ? 0.99 : 0.75, 0, 0.93),
+        'detail'
+      )
+    });
+  }
+
+  return null;
+}
+
 function buildDeterministicAskFinorAnswer(question, context, conversation) {
   const text = String(question || '').trim().toLowerCase();
   const greetingAnswer = buildGreetingAnswer(text);
   if (greetingAnswer) return greetingAnswer;
+  const correctionAnswer = buildCorrectionFollowupAnswer(question, context, conversation);
+  if (correctionAnswer) return correctionAnswer;
   const dateWindow = buildDateWindowFromText(text);
   const explicitHolding = findHoldingFromQuestion(question, context);
   const holding = explicitHolding || findHoldingFromConversation(conversation, context);
   const tradeSummary = findTradeSummaryFromQuestion(question, context) || findTradeSummaryFromConversation(conversation, context);
   const comparisonHoldings = findAllHoldingsFromQuestion(question, context);
+  const topLimit = extractTopLimit(text) || 5;
+  const helpQuery = /(what can you do|help|capabilities|what all can i ask|how can you help)/.test(text);
+  const askPortfolioSummary = /(portfolio summary|summarize my portfolio|portfolio today summary|summary of my portfolio)/.test(text);
+  const askOpenPositions = /(open positions|open holdings|current open positions)/.test(text);
+  const askTopAllocationRisks = /(top allocation risks|allocation risks|concentration risk|highest allocation risk|risk summary)/.test(text);
+  const askCombinedOpenPositionsRisk = askOpenPositions && askTopAllocationRisks;
+  const askAllocationQuery = /(allocation|allocation percentage|allocation %)/.test(text);
+  const askGoldAllocation = /(gold allocation|gold holdings|gold in holdings)/.test(text);
+  const askCashAllocation = /(cash allocation|cash in holdings|cash holdings)/.test(text);
+  const askAssetAllocation = /(asset allocation|equity allocation|gold allocation|cash allocation)/.test(text);
+  const askRealizedLossNames = /(realized loss stock names|loss stock names|stocks in realized loss|realized losers)/.test(text);
+  const askRealizedProfitNames = /(realized profit stock names|profit stock names|stocks in realized profit|realized winners)/.test(text);
   const askHoldingsList =
     /(all stock names|all holdings|current holdings|current holding stocks list|list holdings|holding names|holding list|which stocks do i have)/.test(text);
   const askNamesOnly = /(stock names|holding names|list of stocks|symbol names)/.test(text);
@@ -1023,9 +2517,9 @@ function buildDeterministicAskFinorAnswer(question, context, conversation) {
   const askTopWinners = /(top winners|top winner|best performers|best performing stocks|top gainers)/.test(text);
   const askTopLosers = /(top losers|top loser|worst performers|worst performing stocks|top loss makers|top lossmakers|top \d+ losses|top losses)/.test(text);
   const askBiggestExpenseThisMonth =
-    /(biggest expense category this month|highest expense category this month|top expense category this month)/.test(text);
+    /(biggest expense category this month|highest expense category this month|top expense category this month|biggest expenses this month|highest expenses this month)/.test(text);
   const askBiggestExpense =
-    !askBiggestExpenseThisMonth && /(biggest expense category|highest expense category|top expense category)/.test(text);
+    !askBiggestExpenseThisMonth && /(biggest expense category|highest expense category|top expense category|biggest expenses|highest expenses)/.test(text);
   const askComparison = /(vs|compare|comparison)/.test(text) && comparisonHoldings.length >= 2;
   const sellPrice = resolveSellPriceFromQuestion(text, holding);
   const askWhatIfSell = sellPrice !== null && /(if i sell|if sold|sell at|sold at|profit i will get|how much profit)/.test(text);
@@ -1044,16 +2538,64 @@ function buildDeterministicAskFinorAnswer(question, context, conversation) {
     /(booked loss|realized loss|loss booked|how much loss|loss for|loss in|this month loss|last month loss|last 30 days loss)/.test(text) &&
     !explicitHolding;
 
+  if (helpQuery) {
+    return buildCapabilitiesAnswer();
+  }
+
+  if (askCombinedOpenPositionsRisk) {
+    return buildOpenPositionsAndRiskAnswer(context);
+  }
+
+  if (askPortfolioSummary) {
+    return buildPortfolioSummaryAnswer(context, dateWindow ? dateWindow.label : 'today');
+  }
+
+  if (askOpenPositions) {
+    return buildOpenPositionsAnswer(context);
+  }
+
+  if (askTopAllocationRisks) {
+    return buildTopAllocationRisksAnswer(context);
+  }
+
+  if (askGoldAllocation) {
+    return buildCategoryAllocationAnswer(context, 'gold', getHoldingsByAssetGroup(context, 'gold'));
+  }
+
+  if (askCashAllocation) {
+    return buildCategoryAllocationAnswer(context, 'cash', getHoldingsByAssetGroup(context, 'cash'));
+  }
+
+  if (askAssetAllocation && !explicitHolding) {
+    return [
+      buildCategoryAllocationAnswer(context, 'equity', getHoldingsByAssetGroup(context, 'equity')),
+      buildCategoryAllocationAnswer(context, 'gold', getHoldingsByAssetGroup(context, 'gold')),
+      buildCategoryAllocationAnswer(context, 'cash', getHoldingsByAssetGroup(context, 'cash'))
+    ].join(' ');
+  }
+
+  if (askRealizedLossNames) {
+    return buildRealizedNamesAnswer(context, 'loss', dateWindow);
+  }
+
+  if (askRealizedProfitNames) {
+    return buildRealizedNamesAnswer(context, 'profit', dateWindow);
+  }
+
+  if (askAllocationQuery && explicitHolding) {
+    return buildSingleHoldingAllocationAnswer(explicitHolding);
+  }
+
   if (askMostTraded) {
     return buildMostTradedAnswer(context);
   }
 
   if (askTopWinners) {
-    return buildTopPnlAnswer(context, 'winner');
+    return buildTopPnlAnswer(context, 'winner', topLimit);
   }
 
   if (askTopLosers) {
-    return buildTopPnlAnswer(context, 'loser');
+    return buildTopPnlAnswer(context, 'loser', topLimit);
   }
 
   if (dateWindow && askBiggestExpense) {
