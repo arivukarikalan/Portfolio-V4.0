@@ -30,7 +30,7 @@ function setupPwaHead(): void {
     sizes: '192x192',
     type: 'image/png'
   });
-  ensureMeta('theme-color', '#0f766e');
+  ensureMeta('theme-color', '#ffffff');
   ensureMeta('apple-mobile-web-app-capable', 'yes');
   ensureMeta('apple-mobile-web-app-status-bar-style', 'default');
   ensureMeta('apple-mobile-web-app-title', 'Ask Finor');
