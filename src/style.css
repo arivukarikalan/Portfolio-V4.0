@@ -24,6 +24,30 @@
   border-radius: 1rem;
 }
 
+.sell-planner-input {
+  max-width: 148px;
+}
+
+.sell-planner-row-actions .btn {
+  white-space: nowrap;
+}
+
+.sell-planner-hero .card-body,
+.sell-planner-table-card .card-body {
+  padding: 1rem 1.05rem;
+}
+
+@media (max-width: 767.98px) {
+  .sell-planner-input {
+    max-width: none;
+    width: 100%;
+  }
+
+  .sell-planner-row-actions {
+    justify-content: flex-start !important;
+  }
+}
+
 .scenario-card-active {
   border-color: #2563eb !important;
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);

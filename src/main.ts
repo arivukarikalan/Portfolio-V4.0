@@ -74,6 +74,7 @@ const allowed: AppView[] = [
   'exit-strategy',
   'insights',
   'target',
+  'sell-planner',
   'transactions',
   'finance',
   'pnl',

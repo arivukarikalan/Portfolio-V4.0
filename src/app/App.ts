@@ -8,6 +8,7 @@ import { renderAskFinorView } from '../views/askFinor';
 import { renderExitStrategyView } from '../views/exitStrategy';
 import { renderInsightsView } from '../views/insights';
 import { renderTargetView } from '../views/target';
+import { renderSellPlannerView } from '../views/sellPlanner';
 import { renderTransactionsView } from '../views/transactions';
 import { renderFinanceView } from '../views/finance';
 import { renderPnlView } from '../views/pnl';
@@ -44,6 +45,9 @@ export function bootstrapApp(root: HTMLElement, view: AppView): void {
       break;
     case 'target':
       renderTargetView(root);
+      break;
+    case 'sell-planner':
+      renderSellPlannerView(root);
       break;
     case 'transactions':
       renderTransactionsView(root);

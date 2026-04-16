@@ -36,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'exit-strategy', label: 'Exit Strategy', icon: 'crosshair', href: 'exit-strategy.html' },
   { id: 'insights', label: 'Insights', icon: 'lightbulb', href: 'insights.html' },
   { id: 'target', label: 'Target Planner', icon: 'target', href: 'target.html' },
+  { id: 'sell-planner', label: 'Sell Planner', icon: 'calculator', href: 'sell-planner.html' },
   { id: 'transactions', label: 'Transactions', icon: 'arrow-right-left', href: 'transactions.html' },
   { id: 'finance', label: 'Finance Dashboard', icon: 'wallet', href: 'finance.html' },
   { id: 'pnl', label: 'Profit / Loss', icon: 'trending-up', href: 'pnl.html' },

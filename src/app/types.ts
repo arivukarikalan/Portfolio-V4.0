@@ -7,6 +7,7 @@ export type AppView =
   | 'exit-strategy'
   | 'insights'
   | 'target'
+  | 'sell-planner'
   | 'transactions'
   | 'finance'
   | 'pnl'

@@ -16,6 +16,7 @@ export default defineConfig({
         'exit-strategy': resolve(__dirname, 'exit-strategy.html'),
         insights: resolve(__dirname, 'insights.html'),
         target: resolve(__dirname, 'target.html'),
+        'sell-planner': resolve(__dirname, 'sell-planner.html'),
         transactions: resolve(__dirname, 'transactions.html'),
         finance: resolve(__dirname, 'finance.html'),
         pnl: resolve(__dirname, 'pnl.html'),
