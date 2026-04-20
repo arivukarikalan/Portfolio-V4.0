@@ -43,8 +43,93 @@
     width: 100%;
   }
 
+  .sell-planner-page .sell-planner-hero .card-body,
+  .sell-planner-page .sell-planner-table-card .card-body {
+    padding: 0.9rem;
+  }
+
+  .sell-planner-page .sell-planner-actions {
+    width: 100%;
+  }
+
+  .sell-planner-page .sell-planner-actions .btn {
+    flex: 1 1 calc(50% - 0.25rem);
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table {
+    border-spacing: 0 0.7rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody tr {
+    grid-template-columns: 1fr 1fr;
+    background: #ffffff;
+    border-radius: 18px;
+    padding: 0.55rem;
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td {
+    align-items: flex-start;
+    padding: 0.38rem 0.45rem;
+    font-size: 0.86rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td::before {
+    font-size: 0.58rem;
+    color: #94a3b8;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='summary'][data-summary='ticker'] {
+    grid-column: 1;
+    order: 1;
+    justify-content: flex-start;
+    align-items: center;
+    font-size: 0.95rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='summary'][data-summary='invested'] {
+    grid-column: 1;
+    order: 2;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='summary'][data-summary='target'] {
+    grid-column: 2;
+    order: 2;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='planner-input'] {
+    display: block;
+    grid-column: 1 / -1;
+    order: 3;
+    padding-top: 0.45rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='planner-input']::before {
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='detail'] {
+    display: flex;
+    grid-column: 1 / -1;
+    order: 4;
+    background: #f8fafc;
+    border-radius: 12px;
+    margin-top: 0.15rem;
+  }
+
+  .sell-planner-page .table.mobile-stack.sell-planner-table tbody td[data-role='action'] {
+    order: 5;
+    padding-top: 0.45rem;
+  }
+
   .sell-planner-row-actions {
     justify-content: flex-start !important;
+    width: 100%;
+  }
+
+  .sell-planner-row-actions .btn {
+    flex: 1 1 30%;
   }
 }
 

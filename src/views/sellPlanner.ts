@@ -169,7 +169,7 @@ export function renderSellPlannerView(root: HTMLElement): void {
                 <div class="text-muted small">Whole-holding sell only in this version.</div>
               </div>
               <div class="table-responsive">
-                <table class="table table-sm target-table align-middle w-100 mobile-stack mobile-toggle-details sell-planner-table">
+                <table class="table table-sm target-table align-middle w-100 mobile-stack sell-planner-table">
                   <thead>
                     <tr>
                       <th>Symbol</th>
@@ -306,15 +306,19 @@ export function renderSellPlannerView(root: HTMLElement): void {
           const returnClass = !outcome ? 'text-muted' : (outcome.returnPct ?? 0) >= 0 ? 'text-success' : 'text-danger';
           return `
             <tr>
-              <td data-label="Symbol" data-role="summary">
+              <td data-label="Symbol" data-role="summary" data-summary="ticker">
                 <div class="fw-semibold">${holding.symbol}</div>
-                <div class="text-muted small">Invested ${formatMoney(holding.invested)}</div>
-                <div class="text-muted small">Target ${formatMoney(holding.targetSellPrice)}</div>
               </td>
-              <td class="text-end" data-label="Qty" data-role="detail">${holding.qty}</td>
+              <td class="text-end" data-label="Invested" data-role="summary" data-summary="invested">
+                ${formatMoney(holding.invested)}
+                <div class="text-muted small">Qty ${holding.qty}</div>
+              </td>
+              <td class="text-end" data-label="Target" data-role="summary" data-summary="target">
+                ${formatMoney(holding.targetSellPrice)}
+                <div class="text-muted small">LTP ${formatMoney(holding.ltp)}</div>
+              </td>
               <td class="text-end" data-label="Avg Buy" data-role="detail">${formatMoney(holding.avgBuy)}</td>
-              <td class="text-end" data-label="LTP" data-role="detail">${formatMoney(holding.ltp)}</td>
-              <td class="text-end" data-label="Planned Sell" data-role="detail">
+              <td class="text-end" data-label="Planned Sell" data-role="planner-input">
                 <input class="form-control form-control-sm sell-planner-input ms-auto" type="number" step="0.01" min="0" placeholder="Sell price" data-role="planned-price" data-symbol="${holding.symbol}" value="${plannedSellPrice > 0 ? plannedSellPrice.toFixed(2) : ''}" />
                 <div class="text-muted small mt-1">Break-even ${formatMoney(holding.breakEvenSellPrice)}</div>
               </td>

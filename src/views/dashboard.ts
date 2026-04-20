@@ -54,18 +54,6 @@ const isDarkTheme = () => document.documentElement.getAttribute('data-theme') ==
 const ONBOARDING_KEY = 'finance_app_v4_onboarding_v1';
 
 
-function groupByDate(trades: TradeRecord[]): Map<string, TradeRecord[]> {
-  const map = new Map<string, TradeRecord[]>();
-  trades.forEach((trade) => {
-    const key = trade.tradeDate || '';
-    if (!key) return;
-    const list = map.get(key) || [];
-    list.push(trade);
-    map.set(key, list);
-  });
-  return map;
-}
-
 function buildHoldings(trades: TradeRecord[], priceMap: Map<string, number>): HoldingSnapshot[] {
   const symbols = Array.from(new Set(trades.map((trade) => normalizeSymbol(trade.symbol)).filter(Boolean)));
   return symbols
@@ -97,38 +85,41 @@ function buildHoldings(trades: TradeRecord[], priceMap: Map<string, number>): Ho
     .sort((a, b) => b.currentValue - a.currentValue);
 }
 
-function buildTrend(trades: TradeRecord[]): TrendPoint[] {
-  const grouped = groupByDate(trades);
-  const dates = Array.from(grouped.keys()).sort();
-  let runningQty: Record<string, number> = {};
-  let runningCost: Record<string, number> = {};
+function buildTrend(trades: TradeRecord[], livePriceMap: Map<string, number>): TrendPoint[] {
+  const dates = Array.from(new Set(trades.map((trade) => trade.tradeDate).filter(Boolean))).sort();
+  const symbols = Array.from(new Set(trades.map((trade) => normalizeSymbol(trade.symbol)).filter(Boolean)));
 
-  return dates.map((date) => {
-    const rows = grouped.get(date) || [];
-    rows.forEach((trade) => {
-      const symbol = normalizeSymbol(trade.symbol);
-      if (!symbol) return;
-      runningQty[symbol] = runningQty[symbol] || 0;
-      runningCost[symbol] = runningCost[symbol] || 0;
-      if (trade.side === 'BUY') {
-        runningQty[symbol] += trade.quantity;
-        runningCost[symbol] += trade.quantity * trade.price;
-      } else {
-        const qtyToSell = trade.quantity;
-        const currentQty = runningQty[symbol];
-        if (currentQty <= 0) return;
-        const avg = runningCost[symbol] / currentQty;
-        runningQty[symbol] = Math.max(0, currentQty - qtyToSell);
-        runningCost[symbol] = Math.max(0, runningCost[symbol] - avg * qtyToSell);
-      }
+  const buildPoint = (date: string, rows: TradeRecord[]): TrendPoint => {
+    let invested = 0;
+    let value = 0;
+    symbols.forEach((symbol) => {
+      const cycle = computeCurrentCycleState(symbol, rows);
+      if (cycle.qty <= 0) return;
+      invested += cycle.cost;
+      const livePrice = livePriceMap.get(symbol);
+      value += cycle.qty * (livePrice && livePrice > 0 ? livePrice : cycle.avg || 0);
     });
-    const invested = Object.values(runningCost).reduce((sum, value) => sum + value, 0);
     return {
       date,
       invested,
-      value: invested
+      value
     };
+  };
+
+  const points = dates.map((date) => {
+    const rows = trades.filter((trade) => trade.tradeDate <= date);
+    return buildPoint(date, rows);
   });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const currentPoint = buildPoint(today, trades);
+  if (points.length && points[points.length - 1].date === today) {
+    points[points.length - 1] = currentPoint;
+  } else if (points.length) {
+    points.push(currentPoint);
+  }
+
+  return points;
 }
 
 export function renderDashboardView(root: HTMLElement): void {
@@ -711,7 +702,7 @@ export function renderDashboardView(root: HTMLElement): void {
       trendCanvas.classList.remove('d-none');
       trendEmpty?.classList.add('d-none');
       const labels = points.map((point) => point.date);
-      const series = points.map((point) => point.invested);
+      const series = points.map((point) => point.value);
       const tickFormatter = (value: unknown, index: number) => {
         const raw = labels[index];
         if (!raw) return String(value);
@@ -981,14 +972,13 @@ export function renderDashboardView(root: HTMLElement): void {
           .filter((row): row is [string, number] => Boolean(row))
       );
       holdings = buildHoldings(trades, priceMap);
-      trendData = buildTrend(trades);
-
       const latestPriceAt = priceRows.reduce<string | null>((latest, row) => {
         if (!row?.fetchedAt) return latest;
         if (!latest) return row.fetchedAt;
         return row.fetchedAt > latest ? row.fetchedAt : latest;
       }, null);
       latestRefreshLabel = formatDateTime(latestPriceAt);
+      trendData = buildTrend(trades, priceMap);
       if (lastRefresh) lastRefresh.textContent = `Last refresh: ${latestRefreshLabel}`;
 
       renderKpis();
