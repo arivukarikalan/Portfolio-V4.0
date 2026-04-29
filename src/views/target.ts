@@ -10,6 +10,7 @@ import { requireSession } from './guards';
 import { formatDate, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
 import { computeCurrentCycleState, computeCurrentCycleLots } from '../utils/tradeCycles';
+import { compareTradeExecutionAsc } from '../utils/tradeOrdering';
 import { toErrorMessage } from '../utils/errors';
 
 type Lot = {
@@ -358,28 +359,28 @@ export function renderTargetView(root: HTMLElement): void {
     const consumeLots = (lots: Lot[], qty: number, predicate?: (lot: Lot) => boolean) => {
       let remaining = qty;
       let cost = 0;
+      let matchedQty = 0;
+      const dates: string[] = [];
       for (let i = 0; i < lots.length && remaining > 0; i += 1) {
         const lot = lots[i];
         if (predicate && !predicate(lot)) continue;
         if (lot.qty > remaining) {
+          matchedQty += remaining;
           cost += remaining * lot.price;
+          if (lot.date) dates.push(lot.date);
           lot.qty -= remaining;
           remaining = 0;
         } else {
+          matchedQty += lot.qty;
           cost += lot.qty * lot.price;
+          if (lot.date) dates.push(lot.date);
           remaining -= lot.qty;
           lots.splice(i, 1);
           i -= 1;
         }
       }
-      return { remaining, cost };
-    };
-
-    const getLotsAvg = (lots: Lot[]) => {
-      const qty = lots.reduce((sum, lot) => sum + lot.qty, 0);
-      if (qty <= 0) return 0;
-      const cost = lots.reduce((sum, lot) => sum + lot.qty * lot.price, 0);
-      return cost / qty;
+      const startDate = dates.length ? dates.sort()[0] : null;
+      return { remaining, cost, matchedQty, startDate };
     };
 
     type SortKey = 'symbol' | 'chg' | 'progress';
@@ -407,69 +408,65 @@ export function renderTargetView(root: HTMLElement): void {
       symbols.forEach((symbol) => {
         const relevant = trades
           .filter((trade) => normalizeSymbol(trade.symbol) === symbol)
-          .sort((a, b) => {
-            if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
-            return a.createdAt.localeCompare(b.createdAt);
-          });
+          .sort(compareTradeExecutionAsc);
 
         const lots: Lot[] = [];
-        let cycleBuyCost = 0;
-        let cycleBuyQty = 0;
-        let cycleSellProceeds = 0;
-        let cycleSellQty = 0;
-        let cycleStart: string | null = null;
-        let earlyFlag = false;
-        let lossFlag = false;
-
+        const grouped = new Map<string, { buys: TradeRecord[]; sells: TradeRecord[] }>();
         relevant.forEach((trade) => {
-          if (trade.side === 'BUY') {
-            if (cycleBuyQty === 0) {
-              cycleStart = trade.tradeDate || null;
-            }
-            lots.push({ qty: trade.quantity, price: trade.price, date: trade.tradeDate || null });
-            cycleBuyCost += trade.quantity * trade.price;
-            cycleBuyQty += trade.quantity;
-          } else if (trade.side === 'SELL') {
-            if (!lots.length) return;
-            let remaining = trade.quantity;
-            const currentAvg = getLotsAvg(lots);
-            const targetPrice = currentAvg > 0 ? currentAvg * (1 + targetPct / 100) : 0;
-            const dateKey = trade.tradeDate || null;
-            if (dateKey) {
-              const sameDay = consumeLots(lots, remaining, (lot) => lot.date === dateKey);
-              remaining = sameDay.remaining;
-            }
-            if (remaining > 0) {
-              const fifo = consumeLots(lots, remaining);
-              remaining = fifo.remaining;
-            }
-            const matchedQty = trade.quantity - remaining;
-            if (matchedQty <= 0) return;
-            const proceeds = matchedQty * trade.price;
-            if (currentAvg > 0 && trade.price < currentAvg) {
-              lossFlag = true;
-            } else if (targetPrice > 0 && trade.price < targetPrice) {
-              earlyFlag = true;
-            }
+          const key = trade.tradeDate || '';
+          const day = grouped.get(key) || { buys: [], sells: [] };
+          if (trade.side === 'BUY') day.buys.push(trade);
+          if (trade.side === 'SELL') day.sells.push(trade);
+          grouped.set(key, day);
+        });
 
-            cycleSellProceeds += proceeds;
-            cycleSellQty += matchedQty;
-            if (cycleSellQty >= cycleBuyQty) {
-              const pnl = cycleSellProceeds - cycleBuyCost;
-              const pnlPct = cycleBuyCost > 0 ? (pnl / cycleBuyCost) * 100 : 0;
+        Array.from(grouped.keys())
+          .sort()
+          .forEach((date) => {
+            const day = grouped.get(date);
+            if (!day) return;
+            day.buys.sort(compareTradeExecutionAsc).forEach((trade) => {
+              if (!(trade.quantity > 0) || !(trade.price > 0)) return;
+              lots.push({ qty: trade.quantity, price: trade.price, date: trade.tradeDate || null });
+            });
+            day.sells.sort(compareTradeExecutionAsc).forEach((trade) => {
+              if (!lots.length || !(trade.quantity > 0) || !(trade.price > 0)) return;
+              let remaining = trade.quantity;
+              let buyCost = 0;
+              let sellQty = 0;
+              const startDates: string[] = [];
+              const dateKey = trade.tradeDate || null;
+              if (dateKey) {
+                const sameDay = consumeLots(lots, remaining, (lot) => lot.date === dateKey);
+                remaining = sameDay.remaining;
+                buyCost += sameDay.cost;
+                sellQty += sameDay.matchedQty;
+                if (sameDay.startDate) startDates.push(sameDay.startDate);
+              }
+              if (remaining > 0) {
+                const fifo = consumeLots(lots, remaining);
+                remaining = fifo.remaining;
+                buyCost += fifo.cost;
+                sellQty += fifo.matchedQty;
+                if (fifo.startDate) startDates.push(fifo.startDate);
+              }
+              if (sellQty <= 0 || buyCost <= 0) return;
+              const sellProceeds = sellQty * trade.price;
+              const pnl = sellProceeds - buyCost;
+              const pnlPct = (pnl / buyCost) * 100;
               let status: ClosedCycle['status'] = 'COMPLETED';
               if (pnlPct < 0) {
                 status = 'LOSS';
-              } else if (earlyFlag || lossFlag || pnlPct < targetPct) {
+              } else if (pnlPct < targetPct) {
                 status = 'EARLY_EXIT';
               }
               const closed: ClosedCycle = {
                 symbol,
-                startDate: cycleStart,
+                startDate: startDates.length ? startDates.sort()[0] : null,
                 endDate: trade.tradeDate || null,
-                buyCost: cycleBuyCost,
-                sellProceeds: cycleSellProceeds,
-                sellQty: cycleSellQty,
+                buyCost,
+                sellProceeds,
+                sellQty,
                 pnl,
                 pnlPct,
                 status
@@ -477,18 +474,8 @@ export function renderTargetView(root: HTMLElement): void {
               if (status === 'COMPLETED') completed.push(closed);
               if (status === 'EARLY_EXIT') earlyExit.push(closed);
               if (status === 'LOSS') loss.push(closed);
-
-              cycleBuyCost = 0;
-              cycleBuyQty = 0;
-              cycleSellProceeds = 0;
-              cycleSellQty = 0;
-              cycleStart = null;
-              earlyFlag = false;
-              lossFlag = false;
-              lots.length = 0;
-            }
-          }
-        });
+            });
+          });
 
         const current = computeCurrentCycleState(symbol, relevant);
         if (current.qty > 0) {
