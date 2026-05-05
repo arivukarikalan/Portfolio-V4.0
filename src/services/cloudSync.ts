@@ -17,6 +17,24 @@ import { getSession } from '../storage/db';
 
 type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error';
 
+export type SnapshotSummary = {
+  snapshotId: string;
+  timestamp: string;
+  updatedAt: string;
+  tradesCount: number;
+  transactionsCount: number;
+  goalsCount: number;
+  recoveryPlansCount: number;
+  reentryPlansCount: number;
+  exitStrategiesCount: number;
+  settingsPresent: boolean;
+  totalItems: number;
+  isEmpty: boolean;
+  invalid?: boolean;
+  lastTradeDate?: string;
+  lastTransactionDate?: string;
+};
+
 let started = false;
 let syncTimer: number | null = null;
 let priceTimer: number | null = null;
@@ -67,6 +85,38 @@ function pendingSummary(payload?: SnapshotPayload): string {
     (payload.exitStrategies?.length || 0) +
     overrideCount;
   return `${count} items`;
+}
+
+function snapshotDataCount(payload?: SnapshotPayload): number {
+  if (!payload) return 0;
+  return (
+    (payload.trades?.length || 0) +
+    (payload.transactions?.length || 0) +
+    (payload.goals?.length || 0) +
+    (payload.recoveryPlans?.length || 0) +
+    (payload.reentryPlans?.length || 0) +
+    (payload.exitStrategies?.length || 0)
+  );
+}
+
+function summaryDataCount(summary: SnapshotSummary): number {
+  return (
+    (summary.tradesCount || 0) +
+    (summary.transactionsCount || 0) +
+    (summary.goalsCount || 0) +
+    (summary.recoveryPlansCount || 0) +
+    (summary.reentryPlansCount || 0) +
+    (summary.exitStrategiesCount || 0)
+  );
+}
+
+export async function listCloudSnapshots(userId: string, limit = 30): Promise<SnapshotSummary[]> {
+  const data = await postApi<{ rows: SnapshotSummary[] }>({
+    mode: 'list_snapshots',
+    userId,
+    limit
+  });
+  return Array.isArray(data.rows) ? data.rows : [];
 }
 
 function pendingStatusLabel(state: Awaited<ReturnType<typeof getSyncState>>): string {
@@ -187,7 +237,7 @@ async function buildSnapshot(userId: string): Promise<SnapshotPayload> {
   };
 }
 
-async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<void> {
+export async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<void> {
   if (Array.isArray(payload.trades)) {
     await replaceTradesForUser(userId, payload.trades);
   }
@@ -212,6 +262,65 @@ async function applySnapshot(userId: string, payload: SnapshotPayload): Promise<
   if (payload.mappingOverrides) {
     mergeMappingOverrides(payload.mappingOverrides);
   }
+}
+
+async function preventEmptySnapshotPush(userId: string, payload: SnapshotPayload): Promise<boolean> {
+  if (snapshotDataCount(payload) > 0) return false;
+  let rows: SnapshotSummary[] = [];
+  try {
+    rows = await listCloudSnapshots(userId, 10);
+  } catch {
+    throw new Error('Empty local data was not pushed because cloud history could not be checked.');
+  }
+  const hasCloudData = rows.some((row) => summaryDataCount(row) > 0);
+  const message = hasCloudData
+    ? 'Empty local data was not pushed. Restore a cloud snapshot from Settings instead.'
+    : 'Empty local data was not pushed.';
+  await clearPendingPayload();
+  await setSyncState({
+    ...(await getSyncState()),
+    id: 'sync',
+    pendingDirty: false,
+    pendingSince: undefined,
+    pendingChangeCount: 0,
+    lastError: message
+  });
+  await addActivityLog('sync', message);
+  await updateNotificationStats();
+  setIndicator('idle', hasCloudData ? 'Restore needed' : 'Synced');
+  return true;
+}
+
+export async function restoreCloudSnapshot(session: UserSession, snapshotId: string): Promise<SnapshotPayload> {
+  if (!navigator.onLine) {
+    setIndicator('offline');
+    throw new Error('Connect to the internet to restore a cloud snapshot.');
+  }
+  setIndicator('syncing');
+  const data = await postApi<{ payload: SnapshotPayload; summary?: SnapshotSummary; message?: string }>({
+    mode: 'restore_snapshot',
+    userId: session.userId,
+    snapshotId
+  });
+  if (!data.payload) {
+    throw new Error('Snapshot restore did not return data.');
+  }
+  await applySnapshot(session.userId, data.payload);
+  await clearPendingPayload();
+  await setSyncState({
+    ...(await getSyncState()),
+    id: 'sync',
+    pendingDirty: false,
+    pendingSince: undefined,
+    pendingChangeCount: 0,
+    lastPullAt: new Date().toISOString(),
+    lastCloudUpdatedAt: data.payload.updatedAt,
+    lastError: ''
+  });
+  await addActivityLog('sync', `Cloud snapshot restored (${pendingSummary(data.payload)}).`);
+  await updateNotificationStats();
+  setIndicator('idle', 'Restored');
+  return data.payload;
 }
 
 export async function queueSnapshot(userId: string, options?: { increment?: boolean }): Promise<void> {
@@ -254,6 +363,7 @@ export async function syncNow(session: UserSession): Promise<void> {
     payload = await buildSnapshot(session.userId);
   }
   try {
+    if (await preventEmptySnapshotPush(session.userId, payload)) return;
     await postApi({ mode: 'push', userId: session.userId, payload });
     await clearPendingPayload();
     const latestState = await getSyncState();

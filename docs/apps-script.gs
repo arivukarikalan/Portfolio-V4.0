@@ -35,6 +35,8 @@ function doPost(e) {
   if (mode === 'get_public_config') return jsonResponse(handleGetPublicConfig(body));
   if (mode === 'set_admin_config') return jsonResponse(handleSetAdminConfig(body));
   if (mode === 'trim_snapshots') return jsonResponse(handleTrimSnapshots(body));
+  if (mode === 'list_snapshots') return jsonResponse(handleListSnapshots(body));
+  if (mode === 'restore_snapshot') return jsonResponse(handleRestoreSnapshot(body));
   if (mode === 'push') return jsonResponse(handlePush(body));
   if (mode === 'list_nse_master') return jsonResponse(handleListNseMaster(body));
   if (mode === 'list_nse_master_user') return jsonResponse(handleListNseMasterUser(body));
@@ -3557,11 +3559,164 @@ function handlePush(body) {
   const userId = String(body.userId || '').trim();
   const payload = body.payload || {};
   if (!userId) return { ok: false, message: 'userId required' };
+  const incomingSummary = summarizeSnapshotPayload(payload);
+  const hasExistingData = listSnapshotsForUser(userId).some(function (row) {
+    return !row.invalid && Number(row.totalItems || 0) > 0;
+  });
+  if (incomingSummary.totalItems === 0 && hasExistingData) {
+    return { ok: false, message: 'Empty snapshot rejected. Restore an existing cloud snapshot instead.' };
+  }
 
   const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
   sheet.appendRow([nowIso(), userId, JSON.stringify(payload)]);
   trimSnapshotsForUser(userId);
   return { ok: true, data: { message: 'Snapshot stored' } };
+}
+
+function summarizeSnapshotPayload(payload) {
+  payload = payload || {};
+  const trades = Array.isArray(payload.trades) ? payload.trades : [];
+  const transactions = Array.isArray(payload.transactions) ? payload.transactions : [];
+  const goals = Array.isArray(payload.goals) ? payload.goals : [];
+  const recoveryPlans = Array.isArray(payload.recoveryPlans) ? payload.recoveryPlans : [];
+  const reentryPlans = Array.isArray(payload.reentryPlans) ? payload.reentryPlans : [];
+  const exitStrategies = Array.isArray(payload.exitStrategies) ? payload.exitStrategies : [];
+  const lastTradeDate = trades.reduce(function (latest, row) {
+    const value = String(row && row.tradeDate || '').trim();
+    return value && value > latest ? value : latest;
+  }, '');
+  const lastTransactionDate = transactions.reduce(function (latest, row) {
+    const value = String(row && row.date || '').trim();
+    return value && value > latest ? value : latest;
+  }, '');
+  const totalItems =
+    trades.length +
+    transactions.length +
+    goals.length +
+    recoveryPlans.length +
+    reentryPlans.length +
+    exitStrategies.length;
+  return {
+    updatedAt: String(payload.updatedAt || ''),
+    tradesCount: trades.length,
+    transactionsCount: transactions.length,
+    goalsCount: goals.length,
+    recoveryPlansCount: recoveryPlans.length,
+    reentryPlansCount: reentryPlans.length,
+    exitStrategiesCount: exitStrategies.length,
+    settingsPresent: Boolean(payload.settings),
+    totalItems: totalItems,
+    isEmpty: totalItems === 0,
+    lastTradeDate: lastTradeDate,
+    lastTransactionDate: lastTransactionDate
+  };
+}
+
+function buildSnapshotId(rowIndex, timestamp) {
+  return String(rowIndex) + '|' + Utilities.base64EncodeWebSafe(String(timestamp || ''));
+}
+
+function parseSnapshotId(snapshotId) {
+  const parts = String(snapshotId || '').split('|');
+  return {
+    rowIndex: Number(parts[0] || 0),
+    timestamp: parts.length > 1 ? Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString() : ''
+  };
+}
+
+function listSnapshotsForUser(userId) {
+  const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
+  const values = sheet.getDataRange().getValues();
+  const rows = [];
+  for (let i = 1; i < values.length; i += 1) {
+    if (String(values[i][1] || '').trim() !== userId) continue;
+    const timestamp = String(values[i][0] || '').trim();
+    try {
+      const payload = JSON.parse(String(values[i][2] || '{}'));
+      const summary = summarizeSnapshotPayload(payload);
+      rows.push(Object.assign({
+        snapshotId: buildSnapshotId(i + 1, timestamp),
+        timestamp: timestamp,
+        rowIndex: i + 1
+      }, summary));
+    } catch (err) {
+      rows.push({
+        snapshotId: buildSnapshotId(i + 1, timestamp),
+        timestamp: timestamp,
+        rowIndex: i + 1,
+        updatedAt: '',
+        tradesCount: 0,
+        transactionsCount: 0,
+        goalsCount: 0,
+        recoveryPlansCount: 0,
+        reentryPlansCount: 0,
+        exitStrategiesCount: 0,
+        settingsPresent: false,
+        totalItems: 0,
+        isEmpty: true,
+        invalid: true,
+        lastTradeDate: '',
+        lastTransactionDate: ''
+      });
+    }
+  }
+  rows.sort(function (a, b) {
+    return String(b.timestamp || '').localeCompare(String(a.timestamp || '')) || b.rowIndex - a.rowIndex;
+  });
+  return rows;
+}
+
+function findSnapshotPayload(userId, snapshotId) {
+  const parsed = parseSnapshotId(snapshotId);
+  const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
+  const values = sheet.getDataRange().getValues();
+  const candidates = [];
+  if (parsed.rowIndex > 1 && parsed.rowIndex <= values.length) {
+    candidates.push(parsed.rowIndex);
+  }
+  for (let i = values.length - 1; i >= 1; i -= 1) {
+    candidates.push(i + 1);
+  }
+  const seen = {};
+  for (let j = 0; j < candidates.length; j += 1) {
+    const rowIndex = candidates[j];
+    if (seen[rowIndex]) continue;
+    seen[rowIndex] = true;
+    const row = values[rowIndex - 1];
+    if (!row || String(row[1] || '').trim() !== userId) continue;
+    const timestamp = String(row[0] || '').trim();
+    if (parsed.timestamp && timestamp !== parsed.timestamp && rowIndex !== parsed.rowIndex) continue;
+    return JSON.parse(String(row[2] || '{}'));
+  }
+  return null;
+}
+
+function handleListSnapshots(body) {
+  const userId = String(body.userId || '').trim();
+  if (!userId) return { ok: false, message: 'userId required' };
+  const limit = Math.max(1, Math.min(100, Number(body.limit || 30)));
+  const rows = listSnapshotsForUser(userId).slice(0, limit);
+  return { ok: true, data: { rows: rows } };
+}
+
+function handleRestoreSnapshot(body) {
+  const userId = String(body.userId || '').trim();
+  const snapshotId = String(body.snapshotId || '').trim();
+  if (!userId || !snapshotId) return { ok: false, message: 'userId and snapshotId required' };
+  const payload = findSnapshotPayload(userId, snapshotId);
+  if (!payload) return { ok: false, message: 'Snapshot not found' };
+  const restored = Object.assign({}, payload, { updatedAt: nowIso() });
+  const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
+  sheet.appendRow([nowIso(), userId, JSON.stringify(restored)]);
+  trimSnapshotsForUser(userId);
+  return {
+    ok: true,
+    data: {
+      payload: restored,
+      summary: summarizeSnapshotPayload(restored),
+      message: 'Snapshot restored'
+    }
+  };
 }
 
 function handlePull(e) {

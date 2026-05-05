@@ -24,7 +24,12 @@ import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recov
 import { listReentryPlans, replaceReentryPlansForUser } from '../storage/reentryPlans';
 import { listExitStrategies, replaceExitStrategiesForUser } from '../storage/exitStrategies';
 import { deleteUserSettings, getUserSettings, saveUserSettings } from '../storage/settings';
-import { queueSnapshot } from '../services/cloudSync';
+import {
+  listCloudSnapshots,
+  queueSnapshot,
+  restoreCloudSnapshot,
+  type SnapshotSummary
+} from '../services/cloudSync';
 import { requireSession } from './guards';
 import { lucideIcon } from '../ui/icons';
 import { renderConfirmModal, bindConfirmModal } from '../ui/confirm';
@@ -169,6 +174,29 @@ export function renderSettingsView(root: HTMLElement): void {
         </div>
 
         <div class="row g-3 mt-4">
+          <div class="col-12">
+            <div class="card shadow-sm border-0 h-100">
+              <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                  <div>
+                    <h2 class="h6 mb-1 section-title">
+                      <span class="section-icon">${lucideIcon('history')}</span>
+                      Cloud Snapshot Timeline
+                    </h2>
+                    <div class="text-muted small" id="settings-snapshot-status">
+                      Load cloud backups and restore a known-good point in time.
+                    </div>
+                  </div>
+                  <button class="btn btn-outline-primary btn-sm" id="settings-snapshot-refresh" type="button">
+                    ${lucideIcon('refresh-ccw')} Load Snapshots
+                  </button>
+                </div>
+                <div id="settings-snapshot-list" class="vstack gap-2">
+                  <div class="text-muted small">No snapshots loaded yet.</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="col-xl-6">
             <div class="card shadow-sm border-0 h-100">
               <div class="card-body">
@@ -277,6 +305,9 @@ export function renderSettingsView(root: HTMLElement): void {
     const importCancel = root.querySelector<HTMLButtonElement>('#settings-import-cancel');
     const importMerge = root.querySelector<HTMLButtonElement>('#settings-import-merge');
     const importReplace = root.querySelector<HTMLButtonElement>('#settings-import-replace');
+    const snapshotRefresh = root.querySelector<HTMLButtonElement>('#settings-snapshot-refresh');
+    const snapshotStatus = root.querySelector<HTMLDivElement>('#settings-snapshot-status');
+    const snapshotList = root.querySelector<HTMLDivElement>('#settings-snapshot-list');
     const deleteScope = root.querySelector<HTMLSelectElement>('#settings-delete-scope');
     const deleteBtn = root.querySelector<HTMLButtonElement>('#settings-delete-btn');
 
@@ -304,6 +335,9 @@ export function renderSettingsView(root: HTMLElement): void {
       !importCancel ||
       !importMerge ||
       !importReplace ||
+      !snapshotRefresh ||
+      !snapshotStatus ||
+      !snapshotList ||
       !deleteScope ||
       !deleteBtn
     ) {
@@ -311,6 +345,97 @@ export function renderSettingsView(root: HTMLElement): void {
     }
 
     const confirmAction = bindConfirmModal(root);
+    let cloudSnapshots: SnapshotSummary[] = [];
+
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+    const formatSnapshotDate = (value?: string) => {
+      if (!value) return '--';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    };
+
+    const snapshotItemCount = (row: SnapshotSummary) =>
+      (row.tradesCount || 0) +
+      (row.transactionsCount || 0) +
+      (row.goalsCount || 0) +
+      (row.recoveryPlansCount || 0) +
+      (row.reentryPlansCount || 0) +
+      (row.exitStrategiesCount || 0);
+
+    const renderSnapshots = () => {
+      if (!cloudSnapshots.length) {
+        snapshotList.innerHTML = '<div class="text-muted small">No cloud snapshots found for this user.</div>';
+        return;
+      }
+      snapshotList.innerHTML = cloudSnapshots
+        .map((row, index) => {
+          const itemCount = snapshotItemCount(row);
+          const isLatest = index === 0;
+          const isEmpty = row.isEmpty || itemCount === 0;
+          const badgeClass = row.invalid
+            ? 'text-bg-danger'
+            : isEmpty
+              ? 'text-bg-warning'
+              : isLatest
+                ? 'text-bg-primary'
+                : 'text-bg-light text-dark';
+          const badgeLabel = row.invalid ? 'Invalid' : isEmpty ? 'Empty' : isLatest ? 'Latest' : 'Backup';
+          const activity = row.lastTradeDate
+            ? `Last trade ${formatSnapshotDate(row.lastTradeDate)}`
+            : row.lastTransactionDate
+              ? `Last transaction ${formatSnapshotDate(row.lastTransactionDate)}`
+              : 'No trade or transaction activity';
+          return `
+            <div class="border rounded-3 p-3">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                <div>
+                  <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                    <span class="badge ${badgeClass}">${badgeLabel}</span>
+                    <span class="fw-semibold">${formatSnapshotDate(row.timestamp || row.updatedAt)}</span>
+                  </div>
+                  <div class="text-muted small">${escapeHtml(activity)}</div>
+                  <div class="small mt-2">
+                    Trades ${row.tradesCount || 0} · Transactions ${row.transactionsCount || 0} · Goals ${row.goalsCount || 0} · Plans ${
+                      (row.recoveryPlansCount || 0) + (row.reentryPlansCount || 0) + (row.exitStrategiesCount || 0)
+                    } · Settings ${row.settingsPresent ? 'yes' : 'no'}
+                  </div>
+                </div>
+                <button class="btn btn-sm ${isEmpty || row.invalid ? 'btn-outline-secondary' : 'btn-outline-success'}" type="button" data-restore-snapshot="${escapeHtml(
+                  row.snapshotId
+                )}" ${row.invalid ? 'disabled' : ''}>
+                  Restore
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+    };
+
+    const loadCloudSnapshots = async () => {
+      clearAlert(feedback);
+      const label = snapshotRefresh.textContent || 'Load Snapshots';
+      setBusy(snapshotRefresh, true, label);
+      try {
+        cloudSnapshots = await listCloudSnapshots(session.userId, 30);
+        snapshotStatus.textContent = cloudSnapshots.length
+          ? `${cloudSnapshots.length} cloud snapshots available. Choose a known-good backup to restore.`
+          : 'No cloud snapshots found for this user.';
+        renderSnapshots();
+      } catch (error) {
+        showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setBusy(snapshotRefresh, false, label);
+      }
+    };
 
     const loadSettings = async () => {
       const settings = await getUserSettings(session.userId);
@@ -1555,6 +1680,40 @@ export function renderSettingsView(root: HTMLElement): void {
 
     importMerge.addEventListener('click', () => void runImport('merge'));
     importReplace.addEventListener('click', () => void runImport('replace'));
+
+    snapshotRefresh.addEventListener('click', () => {
+      void loadCloudSnapshots();
+    });
+
+    snapshotList.addEventListener('click', async (event) => {
+      const target = event.target as HTMLElement;
+      const button = target.closest<HTMLButtonElement>('[data-restore-snapshot]');
+      if (!button) return;
+      const snapshotId = button.dataset.restoreSnapshot;
+      const snapshot = cloudSnapshots.find((row) => row.snapshotId === snapshotId);
+      if (!snapshotId || !snapshot) return;
+      const ok = await confirmAction({
+        title: 'Restore Snapshot',
+        message: `Restore the cloud snapshot from ${formatSnapshotDate(
+          snapshot.timestamp || snapshot.updatedAt
+        )}? This replaces local app data for this user and makes the restored snapshot the latest cloud version.`,
+        confirmLabel: 'Restore',
+        tone: snapshot.isEmpty ? 'danger' : 'primary'
+      });
+      if (!ok) return;
+      const label = button.textContent || 'Restore';
+      setBusy(button, true, label);
+      try {
+        await restoreCloudSnapshot(session, snapshotId);
+        await loadSettings();
+        await loadCloudSnapshots();
+        showAlert(feedback, 'success', 'Cloud snapshot restored.');
+      } catch (error) {
+        showAlert(feedback, 'danger', toErrorMessage(error));
+      } finally {
+        setBusy(button, false, label);
+      }
+    });
 
     deleteBtn.addEventListener('click', async () => {
       clearAlert(feedback);

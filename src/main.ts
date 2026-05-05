@@ -38,8 +38,21 @@ function setupPwaHead(): void {
 }
 
 function registerPwaServiceWorker(): void {
-  if (!import.meta.env.PROD) return;
   if (!('serviceWorker' in navigator)) return;
+  if (!import.meta.env.PROD) {
+    window.addEventListener(
+      'load',
+      () => {
+        void navigator.serviceWorker.getRegistrations().then((registrations) => {
+          registrations.forEach((registration) => {
+            void registration.unregister();
+          });
+        });
+      },
+      { once: true }
+    );
+    return;
+  }
   window.addEventListener(
     'load',
     () => {
