@@ -24,6 +24,7 @@ import { listRecoveryPlans, replaceRecoveryPlansForUser } from '../storage/recov
 import { listReentryPlans, replaceReentryPlansForUser } from '../storage/reentryPlans';
 import { listExitStrategies, replaceExitStrategiesForUser } from '../storage/exitStrategies';
 import { deleteUserSettings, getUserSettings, saveUserSettings } from '../storage/settings';
+import { clearPendingPayload, getSyncState, setSyncState } from '../storage/sync';
 import {
   listCloudSnapshots,
   queueSnapshot,
@@ -370,6 +371,25 @@ export function renderSettingsView(root: HTMLElement): void {
       (row.reentryPlansCount || 0) +
       (row.exitStrategiesCount || 0);
 
+    const localDataCount = async () => {
+      const [trades, transactions, goals, recoveryPlans, reentryPlans, exitStrategies] = await Promise.all([
+        listTrades(session.userId),
+        listTransactions(session.userId),
+        listGoals(session.userId),
+        listRecoveryPlans(session.userId),
+        listReentryPlans(session.userId),
+        listExitStrategies(session.userId)
+      ]);
+      return (
+        trades.length +
+        transactions.length +
+        goals.length +
+        recoveryPlans.length +
+        reentryPlans.length +
+        exitStrategies.length
+      );
+    };
+
     const renderSnapshots = () => {
       if (!cloudSnapshots.length) {
         snapshotList.innerHTML = '<div class="text-muted small">No cloud snapshots found for this user.</div>';
@@ -410,7 +430,7 @@ export function renderSettingsView(root: HTMLElement): void {
                 </div>
                 <button class="btn btn-sm ${isEmpty || row.invalid ? 'btn-outline-secondary' : 'btn-outline-success'}" type="button" data-restore-snapshot="${escapeHtml(
                   row.snapshotId
-                )}" ${row.invalid ? 'disabled' : ''}>
+                )}" ${isEmpty || row.invalid ? 'disabled' : ''}>
                   Restore
                 </button>
               </div>
@@ -425,7 +445,7 @@ export function renderSettingsView(root: HTMLElement): void {
       const label = snapshotRefresh.textContent || 'Load Snapshots';
       setBusy(snapshotRefresh, true, label);
       try {
-        cloudSnapshots = await listCloudSnapshots(session.userId, 30);
+        cloudSnapshots = await listCloudSnapshots(session, 30);
         snapshotStatus.textContent = cloudSnapshots.length
           ? `${cloudSnapshots.length} cloud snapshots available. Choose a known-good backup to restore.`
           : 'No cloud snapshots found for this user.';
@@ -1692,6 +1712,10 @@ export function renderSettingsView(root: HTMLElement): void {
       const snapshotId = button.dataset.restoreSnapshot;
       const snapshot = cloudSnapshots.find((row) => row.snapshotId === snapshotId);
       if (!snapshotId || !snapshot) return;
+      if (snapshot.isEmpty || snapshotItemCount(snapshot) === 0) {
+        showAlert(feedback, 'warning', 'Empty cloud snapshots cannot be restored.');
+        return;
+      }
       const ok = await confirmAction({
         title: 'Restore Snapshot',
         message: `Restore the cloud snapshot from ${formatSnapshotDate(
@@ -1760,8 +1784,22 @@ export function renderSettingsView(root: HTMLElement): void {
           await getUserSettings(session.userId);
           await loadSettings();
         }
-        await queueSnapshot(session.userId);
-        showAlert(feedback, 'success', 'Data cleared.');
+        if (await localDataCount()) {
+          await queueSnapshot(session.userId);
+          showAlert(feedback, 'success', 'Data cleared and queued for cloud sync.');
+        } else {
+          await clearPendingPayload(session.userId);
+          await setSyncState({
+            ...(await getSyncState(session.userId)),
+            id: 'sync',
+            pendingDirty: false,
+            pendingSince: undefined,
+            pendingChangeCount: 0,
+            lastCloudUpdatedAt: new Date().toISOString(),
+            lastError: 'Local data cleared. Cloud snapshots were preserved.'
+          }, session.userId);
+          showAlert(feedback, 'info', 'Local data cleared. Cloud snapshots were preserved for recovery.');
+        }
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {

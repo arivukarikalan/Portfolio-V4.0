@@ -4,7 +4,7 @@ import { lucideIcon } from '../ui/icons';
 import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import { computeCurrentCycleState } from '../utils/tradeCycles';
 import { normalizeSymbol } from '../utils/symbols';
@@ -448,9 +448,15 @@ export function renderSellPlannerView(root: HTMLElement): void {
       const label = syncButton.textContent || 'Sync';
       setBusy(syncButton, true, label);
       try {
-        await syncNow(session);
+        const summary = await refreshLivePricesNow(session);
         await refreshData();
-        showAlert(feedback, 'success', 'Live prices refreshed.');
+        showAlert(
+          feedback,
+          summary.success > 0 ? 'success' : 'warning',
+          summary.requested
+            ? `Live prices refreshed (${summary.success}/${summary.requested} updated).`
+            : 'No tickers found to refresh.'
+        );
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {

@@ -5,6 +5,7 @@ export type UserSession = {
   name: string;
   email: string;
   role: UserRole;
+  sessionToken?: string;
   adminSessionToken?: string;
   createdAt: string;
 };

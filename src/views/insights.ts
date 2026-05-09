@@ -6,7 +6,7 @@ import { setBusy, showAlert } from '../ui/feedback';
 import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import type { TradeRecord, UserSettings } from '../core/types';
 import { formatDate, formatMoney, formatPct } from '../utils/format';
@@ -850,6 +850,7 @@ export function renderInsightsView(root: HTMLElement): void {
       setBusy(syncButton, true, label);
       try {
         await syncNow(session);
+        await refreshLivePricesNow(session);
         await refreshData();
         showAlert(feedback, 'success', 'Insights refreshed.');
       } catch (error) {

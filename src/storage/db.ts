@@ -1,4 +1,4 @@
-import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import {
   ACTIVITY_STORE,
   DB_NAME,
@@ -156,9 +156,8 @@ export async function openFinanceDb(): Promise<IDBPDatabase<FinanceDb>> {
     !db.objectStoreNames.contains(SETTINGS_STORE)
   ) {
     db.close();
-    await deleteDB(DB_NAME);
     dbPromise = null;
-    return openFinanceDb();
+    throw new Error('Local database schema is incomplete. Your data was preserved; please reload or contact support.');
   }
   return db;
 }

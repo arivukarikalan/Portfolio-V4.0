@@ -7,6 +7,7 @@ type LoginData = {
     name: string;
     email?: string;
     role: UserRole;
+    sessionToken?: string;
     adminSessionToken?: string;
   };
 };
@@ -23,6 +24,7 @@ export async function loginWithSheet(loginId: string, password: string): Promise
     name: data.user.name,
     email: data.user.email ?? '',
     role: data.user.role,
+    sessionToken: data.user.sessionToken,
     adminSessionToken: data.user.adminSessionToken,
     createdAt: new Date().toISOString()
   };

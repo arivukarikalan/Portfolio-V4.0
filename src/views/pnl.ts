@@ -7,7 +7,7 @@ import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
 import type { TradeRecord, UserSettings } from '../core/types';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import { formatDate, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
@@ -1262,6 +1262,7 @@ export function renderPnlView(root: HTMLElement): void {
       setBusy(syncButton, true, label);
       try {
         await syncNow(session);
+        await refreshLivePricesNow(session);
         await refreshData();
         if (feedback) showAlert(feedback, 'success', 'P&L refreshed.');
       } catch (error) {

@@ -8,7 +8,7 @@ import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { listGoals } from '../storage/goals';
 import { getUserSettings } from '../storage/settings';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import type { GoalPlan, TradeRecord, TransactionRecord, TransactionType } from '../core/types';
 import { formatDateTime, formatMoney } from '../utils/format';
@@ -1098,6 +1098,7 @@ export function renderFinanceView(root: HTMLElement): void {
       setBusy(syncButton, true, label);
       try {
         await syncNow(session);
+        await refreshLivePricesNow(session);
         await refreshFinance();
         showAlert(feedback, 'success', 'Finance data synced.');
       } catch (error) {

@@ -35,6 +35,13 @@ export type SnapshotSummary = {
   lastTransactionDate?: string;
 };
 
+export type PriceRefreshSummary = {
+  requested: number;
+  success: number;
+  failedTickers: string[];
+  failureReasons: Record<string, string>;
+};
+
 let started = false;
 let syncTimer: number | null = null;
 let priceTimer: number | null = null;
@@ -42,7 +49,7 @@ let pendingTimer: number | null = null;
 let pendingBuild = false;
 let currentStatus: SyncStatus = 'idle';
 let currentConfig: { maxSnapshots: number; livePriceRefreshSec: number; cloudSyncIntervalMin: number; toastAutoCloseSec: number } | null = null;
-let panelBound = false;
+let activeSyncUserId: string | null = null;
 const PENDING_DEBOUNCE_MS = 2500;
 
 function setIndicator(status: SyncStatus, message?: string): void {
@@ -110,10 +117,11 @@ function summaryDataCount(summary: SnapshotSummary): number {
   );
 }
 
-export async function listCloudSnapshots(userId: string, limit = 30): Promise<SnapshotSummary[]> {
+export async function listCloudSnapshots(session: UserSession, limit = 30): Promise<SnapshotSummary[]> {
   const data = await postApi<{ rows: SnapshotSummary[] }>({
     mode: 'list_snapshots',
-    userId,
+    userId: session.userId,
+    sessionToken: session.sessionToken,
     limit
   });
   return Array.isArray(data.rows) ? data.rows : [];
@@ -150,8 +158,8 @@ async function updateSyncLogSummary(): Promise<void> {
     .join('');
 }
 
-async function updateNotificationStats(): Promise<void> {
-  const state = await getSyncState();
+async function updateNotificationStats(userId?: string): Promise<void> {
+  const state = await getSyncState(userId);
   const lastSync = document.querySelector<HTMLElement>('#notif-last-sync');
   const lastPrice = document.querySelector<HTMLElement>('#notif-last-price');
   const txnCount = document.querySelector<HTMLElement>('#notif-txn-count');
@@ -164,7 +172,7 @@ async function updateNotificationStats(): Promise<void> {
   if (txnCount) {
     try {
       const session = await getSession();
-      if (session) {
+      if (session && (!userId || session.userId === userId)) {
         const txns = await listTransactions(session.userId);
         txnCount.textContent = String(txns.length);
       }
@@ -268,7 +276,11 @@ async function preventEmptySnapshotPush(userId: string, payload: SnapshotPayload
   if (snapshotDataCount(payload) > 0) return false;
   let rows: SnapshotSummary[] = [];
   try {
-    rows = await listCloudSnapshots(userId, 10);
+    const session = await getSession();
+    if (!session || session.userId !== userId) {
+      throw new Error('Signed-in session is required to check cloud history.');
+    }
+    rows = await listCloudSnapshots(session, 10);
   } catch {
     throw new Error('Empty local data was not pushed because cloud history could not be checked.');
   }
@@ -276,17 +288,17 @@ async function preventEmptySnapshotPush(userId: string, payload: SnapshotPayload
   const message = hasCloudData
     ? 'Empty local data was not pushed. Restore a cloud snapshot from Settings instead.'
     : 'Empty local data was not pushed.';
-  await clearPendingPayload();
+  await clearPendingPayload(userId);
   await setSyncState({
-    ...(await getSyncState()),
+    ...(await getSyncState(userId)),
     id: 'sync',
     pendingDirty: false,
     pendingSince: undefined,
     pendingChangeCount: 0,
     lastError: message
-  });
+  }, userId);
   await addActivityLog('sync', message);
-  await updateNotificationStats();
+  await updateNotificationStats(userId);
   setIndicator('idle', hasCloudData ? 'Restore needed' : 'Synced');
   return true;
 }
@@ -300,15 +312,16 @@ export async function restoreCloudSnapshot(session: UserSession, snapshotId: str
   const data = await postApi<{ payload: SnapshotPayload; summary?: SnapshotSummary; message?: string }>({
     mode: 'restore_snapshot',
     userId: session.userId,
+    sessionToken: session.sessionToken,
     snapshotId
   });
   if (!data.payload) {
     throw new Error('Snapshot restore did not return data.');
   }
   await applySnapshot(session.userId, data.payload);
-  await clearPendingPayload();
+  await clearPendingPayload(session.userId);
   await setSyncState({
-    ...(await getSyncState()),
+    ...(await getSyncState(session.userId)),
     id: 'sync',
     pendingDirty: false,
     pendingSince: undefined,
@@ -316,15 +329,15 @@ export async function restoreCloudSnapshot(session: UserSession, snapshotId: str
     lastPullAt: new Date().toISOString(),
     lastCloudUpdatedAt: data.payload.updatedAt,
     lastError: ''
-  });
+  }, session.userId);
   await addActivityLog('sync', `Cloud snapshot restored (${pendingSummary(data.payload)}).`);
-  await updateNotificationStats();
+  await updateNotificationStats(session.userId);
   setIndicator('idle', 'Restored');
   return data.payload;
 }
 
 export async function queueSnapshot(userId: string, options?: { increment?: boolean }): Promise<void> {
-  const state = await getSyncState();
+  const state = await getSyncState(userId);
   const increment = options?.increment !== false;
   await setSyncState({
     ...state,
@@ -332,13 +345,13 @@ export async function queueSnapshot(userId: string, options?: { increment?: bool
     pendingDirty: true,
     pendingSince: new Date().toISOString(),
     pendingChangeCount: increment ? (state.pendingChangeCount || 0) + 1 : state.pendingChangeCount || 0
-  });
+  }, userId);
   if (navigator.onLine) {
     setIndicator('idle', 'Pending');
   } else {
     setIndicator('offline');
   }
-  await updateNotificationStats();
+  await updateNotificationStats(userId);
   if (pendingTimer) {
     window.clearTimeout(pendingTimer);
   }
@@ -350,23 +363,23 @@ export async function queueSnapshot(userId: string, options?: { increment?: bool
 export async function syncNow(session: UserSession): Promise<void> {
   if (!navigator.onLine) {
     setIndicator('offline');
-    return;
+    throw new Error('Connect to the internet to sync cloud data.');
   }
   setIndicator('syncing');
-  const state = await getSyncState();
+  const state = await getSyncState(session.userId);
   let payload = state.pendingPayload as SnapshotPayload | undefined;
   if (state.pendingDirty) {
     payload = await buildSnapshot(session.userId);
-    await setPendingPayload(payload);
+    await setPendingPayload(payload, session.userId);
   }
   if (!payload) {
     payload = await buildSnapshot(session.userId);
   }
   try {
     if (await preventEmptySnapshotPush(session.userId, payload)) return;
-    await postApi({ mode: 'push', userId: session.userId, payload });
-    await clearPendingPayload();
-    const latestState = await getSyncState();
+    await postApi({ mode: 'push', userId: session.userId, sessionToken: session.sessionToken, payload });
+    await clearPendingPayload(session.userId);
+    const latestState = await getSyncState(session.userId);
     const pendingSince = latestState.pendingSince ? new Date(latestState.pendingSince).getTime() : 0;
     const snapshotAt = payload.updatedAt ? new Date(payload.updatedAt).getTime() : 0;
     const hasNewerChanges = pendingSince > snapshotAt;
@@ -379,57 +392,74 @@ export async function syncNow(session: UserSession): Promise<void> {
       lastSyncedAt: new Date().toISOString(),
       lastCloudUpdatedAt: payload.updatedAt,
       lastError: ''
-    });
+    }, session.userId);
     await addActivityLog('sync', `Cloud push completed (${pendingSummary(payload)}).`);
-    await updateNotificationStats();
+    await updateNotificationStats(session.userId);
     setIndicator('idle', 'Synced');
     if (hasNewerChanges) {
       await queueSnapshot(session.userId, { increment: false });
     }
   } catch (error) {
+    const message = String((error as Error)?.message || error || 'sync_failed');
     await setSyncState({
-      ...(await getSyncState()),
+      ...(await getSyncState(session.userId)),
       id: 'sync',
       pendingDirty: true,
-      lastError: String((error as Error)?.message || error || 'sync_failed')
-    });
-    await addActivityLog('sync', `Cloud push failed (${String((error as Error)?.message || 'error')}).`);
-    await updateNotificationStats();
+      lastError: message
+    }, session.userId);
+    await addActivityLog('sync', `Cloud push failed (${message}).`);
+    await updateNotificationStats(session.userId);
     setIndicator('error', 'Sync failed');
+    throw new Error(message);
   }
 }
 
 async function pullSnapshot(session: UserSession): Promise<void> {
-  if (!navigator.onLine) return;
-  const state = await getSyncState();
-  if (state.pendingPayload || state.pendingDirty) return;
+  if (!navigator.onLine) throw new Error('Connect to the internet to pull cloud data.');
+  const state = await getSyncState(session.userId);
+  if (state.pendingPayload || state.pendingDirty) {
+    throw new Error('Local changes are pending. Push or restore before pulling cloud data.');
+  }
   try {
-    const data = await getApi<{ payload?: SnapshotPayload }>({ mode: 'pull', userId: session.userId });
+    const data = await getApi<{ payload?: SnapshotPayload }>({
+      mode: 'pull',
+      userId: session.userId,
+      sessionToken: session.sessionToken || ''
+    });
     if (data.payload) {
       const remoteUpdatedAt = data.payload.updatedAt;
       if (remoteUpdatedAt && state.lastCloudUpdatedAt && new Date(remoteUpdatedAt) <= new Date(state.lastCloudUpdatedAt)) {
-        await updateNotificationStats();
+        await updateNotificationStats(session.userId);
         return;
       }
       await applySnapshot(session.userId, data.payload);
       await setSyncState({
-        ...(await getSyncState()),
+        ...(await getSyncState(session.userId)),
         id: 'sync',
         lastPullAt: new Date().toISOString(),
         lastCloudUpdatedAt: remoteUpdatedAt || state.lastCloudUpdatedAt
-      });
+      }, session.userId);
       await addActivityLog('sync', 'Cloud pull completed.');
-      await updateNotificationStats();
+      await updateNotificationStats(session.userId);
     }
-  } catch {
-    // Ignore pull errors to keep offline safe.
+  } catch (error) {
+    const message = String((error as Error)?.message || error || 'pull_failed');
+    await setSyncState({
+      ...(await getSyncState(session.userId)),
+      id: 'sync',
+      lastError: message
+    }, session.userId);
+    await addActivityLog('sync', `Cloud pull failed (${message}).`);
+    await updateNotificationStats(session.userId);
+    setIndicator('error', 'Pull failed');
+    throw new Error(message);
   }
 }
 
 export async function pullNow(session: UserSession): Promise<void> {
   if (!navigator.onLine) {
     setIndicator('offline');
-    return;
+    throw new Error('Connect to the internet to pull cloud data.');
   }
   setIndicator('syncing');
   await pullSnapshot(session);
@@ -437,40 +467,67 @@ export async function pullNow(session: UserSession): Promise<void> {
 }
 
 export async function syncIfPending(session: UserSession): Promise<void> {
-  const state = await getSyncState();
+  const state = await getSyncState(session.userId);
   if (!state.pendingPayload && !state.pendingDirty) {
-    await updateNotificationStats();
+    await updateNotificationStats(session.userId);
     return;
   }
   await syncNow(session);
 }
 
-async function refreshLivePrices(session: UserSession): Promise<void> {
+export async function refreshLivePricesNow(session: UserSession): Promise<PriceRefreshSummary> {
+  if (!navigator.onLine) {
+    setIndicator('offline');
+    throw new Error('Connect to the internet to refresh live prices.');
+  }
   const trades = await listTrades(session.userId);
   const tickers = Array.from(new Set(trades.map((trade) => trade.symbol).filter(Boolean)));
-  if (!tickers.length) return;
+  if (!tickers.length) {
+    return { requested: 0, success: 0, failedTickers: [], failureReasons: {} };
+  }
+  setIndicator('syncing', 'Prices');
   const result = await syncLivePrices(tickers);
-  if (result.prices) {
+  const success = Number(result.success || Object.keys(result.prices || {}).length || 0);
+  const failedTickers = Array.isArray(result.failedTickers) ? result.failedTickers : [];
+  const failureReasons = result.failureReasons || {};
+  if (success > 0) {
     await upsertLivePrices(result.prices);
     await setSyncState({
-      ...(await getSyncState()),
+      ...(await getSyncState(session.userId)),
       id: 'sync',
-      lastPriceAt: new Date().toISOString()
-    });
-    await addActivityLog('price', `Live prices updated (${tickers.length} tickers).`);
-    await updateNotificationStats();
+      lastPriceAt: new Date().toISOString(),
+      lastError: ''
+    }, session.userId);
+    await addActivityLog('price', `Live prices updated (${success}/${tickers.length} tickers).`);
+    await updateNotificationStats(session.userId);
+    setIndicator('idle', 'Synced');
+  } else {
+    const firstFailure = failedTickers[0];
+    const reason = firstFailure ? failureReasons[firstFailure] : '';
+    await addActivityLog('price', `Live price update failed (${tickers.length} tickers${reason ? `: ${reason}` : ''}).`);
+    await setSyncState({
+      ...(await getSyncState(session.userId)),
+      id: 'sync',
+      lastError: reason || 'Live price update failed.'
+    }, session.userId);
+    await updateNotificationStats(session.userId);
+    setIndicator('error', 'Price failed');
   }
+  return { requested: tickers.length, success, failedTickers, failureReasons };
 }
 
 function bindSyncPanel(session: UserSession): void {
-  if (panelBound) return;
-  panelBound = true;
   const pushBtn = document.querySelector<HTMLButtonElement>('#sync-panel-push');
   const pullBtn = document.querySelector<HTMLButtonElement>('#sync-panel-pull');
+  if (pushBtn?.dataset.boundUser === session.userId && pullBtn?.dataset.boundUser === session.userId) return;
+  if (pushBtn) pushBtn.dataset.boundUser = session.userId;
+  if (pullBtn) pullBtn.dataset.boundUser = session.userId;
   pushBtn?.addEventListener('click', async () => {
     pushBtn.disabled = true;
     try {
       await syncNow(session);
+    } catch {
+      // The sync panel status and activity log show the failure details.
     } finally {
       pushBtn.disabled = false;
     }
@@ -479,6 +536,8 @@ function bindSyncPanel(session: UserSession): void {
     pullBtn.disabled = true;
     try {
       await pullNow(session);
+    } catch {
+      // The sync panel status and activity log show the failure details.
     } finally {
       pullBtn.disabled = false;
     }
@@ -486,8 +545,17 @@ function bindSyncPanel(session: UserSession): void {
 }
 
 export async function initCloudSync(session: UserSession): Promise<void> {
-  if (started) return;
+  if (started && activeSyncUserId === session.userId) {
+    setIndicator(navigator.onLine ? currentStatus === 'offline' ? 'idle' : currentStatus : 'offline');
+    await updateNotificationStats(session.userId);
+    bindSyncPanel(session);
+    return;
+  }
+  if (started && activeSyncUserId !== session.userId) {
+    stopCloudSync();
+  }
   started = true;
+  activeSyncUserId = session.userId;
   let config = { maxSnapshots: 10, livePriceRefreshSec: 60, cloudSyncIntervalMin: 10, toastAutoCloseSec: 7 };
   try {
     config = await getAppConfig(session.userId);
@@ -497,7 +565,7 @@ export async function initCloudSync(session: UserSession): Promise<void> {
   currentConfig = config;
   document.documentElement.dataset.toastAutoCloseSec = String(config.toastAutoCloseSec || 7);
   setIndicator(navigator.onLine ? 'idle' : 'offline');
-  await updateNotificationStats();
+  await updateNotificationStats(session.userId);
   bindSyncPanel(session);
 
   window.addEventListener('online', () => {
@@ -508,7 +576,7 @@ export async function initCloudSync(session: UserSession): Promise<void> {
     setIndicator('offline');
   });
 
-  const state = await getSyncState();
+  const state = await getSyncState(session.userId);
   const now = Date.now();
   const syncIntervalMs = Math.max(1, config.cloudSyncIntervalMin) * 60 * 1000;
   const lastPull = state.lastPullAt ? new Date(state.lastPullAt).getTime() : 0;
@@ -517,25 +585,25 @@ export async function initCloudSync(session: UserSession): Promise<void> {
   const shouldSyncNow = navigator.onLine && hasPending;
 
   if (shouldPull) {
-    void pullSnapshot(session);
+    void pullSnapshot(session).catch(() => undefined);
   }
 
   syncTimer = window.setInterval(() => {
-    void syncIfPending(session);
+    void syncIfPending(session).catch(() => undefined);
   }, syncIntervalMs);
 
   const priceIntervalMs = Math.max(10, config.livePriceRefreshSec) * 1000;
   priceTimer = window.setInterval(() => {
     if (navigator.onLine) {
-      void refreshLivePrices(session);
+      void refreshLivePricesNow(session).catch(() => undefined);
     }
   }, priceIntervalMs);
 
   if (navigator.onLine) {
     if (shouldSyncNow) {
-      void syncNow(session);
+      void syncNow(session).catch(() => undefined);
     }
-    void refreshLivePrices(session);
+    void refreshLivePricesNow(session).catch(() => undefined);
   }
 }
 
@@ -545,8 +613,8 @@ async function buildPendingSnapshot(userId: string): Promise<void> {
   pendingBuild = true;
   try {
     const payload = await buildSnapshot(userId);
-    await setPendingPayload(payload);
-    const state = await getSyncState();
+    await setPendingPayload(payload, userId);
+    const state = await getSyncState(userId);
     const pendingSince = state.pendingSince ? new Date(state.pendingSince).getTime() : 0;
     const snapshotAt = payload.updatedAt ? new Date(payload.updatedAt).getTime() : 0;
     const hasNewerChanges = pendingSince > snapshotAt;
@@ -556,12 +624,12 @@ async function buildPendingSnapshot(userId: string): Promise<void> {
       pendingDirty: hasNewerChanges,
       pendingSince: hasNewerChanges ? state.pendingSince : undefined,
       pendingChangeCount: hasNewerChanges ? state.pendingChangeCount : state.pendingChangeCount || 0
-    });
-    await updateNotificationStats();
+    }, userId);
+    await updateNotificationStats(userId);
     if (navigator.onLine && !hasNewerChanges) {
       const session = await getSession();
       if (session) {
-        await syncNow(session);
+        await syncNow(session).catch(() => undefined);
       }
     } else if (hasNewerChanges) {
       await queueSnapshot(userId, { increment: false });
@@ -583,5 +651,6 @@ export function stopCloudSync(): void {
   priceTimer = null;
   pendingTimer = null;
   started = false;
+  activeSyncUserId = null;
 }
 

@@ -2,6 +2,7 @@ const SPREADSHEET_ID = getSpreadsheetId();
 const USERS_SHEET = 'Users';
 const PENDING_USERS_SHEET = 'PendingUsers';
 const SNAPSHOTS_SHEET = 'Snapshots';
+const USER_SESSIONS_SHEET = 'UserSessions';
 const ADMIN_SESSIONS_SHEET = 'AdminSessions';
 const ADMIN_CONFIG_SHEET = 'AdminConfig';
 const TICKER_REQUESTS_SHEET = 'TickerRequests';
@@ -2840,6 +2841,33 @@ function createAdminSession(adminUserId) {
   return token;
 }
 
+function createUserSession(userId) {
+  const token = Utilities.getUuid() + Utilities.getUuid().replace(/-/g, '');
+  const tokenHash = sha256Hex(token);
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const sheet = getSheet(USER_SESSIONS_SHEET, ['sessionId', 'userId', 'tokenHash', 'issuedAt', 'expiresAt', 'status']);
+  sheet.appendRow([Utilities.getUuid(), userId, tokenHash, nowIso(), expiresAt, 'ACTIVE']);
+  return token;
+}
+
+function validateUserSession(userId, token) {
+  const tokenHash = sha256Hex(String(token || ''));
+  const now = new Date().toISOString();
+  const sheet = getSheet(USER_SESSIONS_SHEET, ['sessionId', 'userId', 'tokenHash', 'issuedAt', 'expiresAt', 'status']);
+  const values = sheet.getDataRange().getValues();
+  for (let i = values.length - 1; i >= 1; i -= 1) {
+    const rowUserId = String(values[i][1] || '').trim();
+    const rowTokenHash = String(values[i][2] || '').trim();
+    const expiresAt = String(values[i][4] || '').trim();
+    const status = String(values[i][5] || '').trim().toUpperCase();
+    if (rowUserId !== userId || rowTokenHash !== tokenHash) continue;
+    if (status !== 'ACTIVE') return false;
+    if (!expiresAt || expiresAt <= now) return false;
+    return true;
+  }
+  return false;
+}
+
 function validateAdminSession(adminUserId, token) {
   const tokenHash = sha256Hex(String(token || ''));
   const now = new Date().toISOString();
@@ -2877,6 +2905,15 @@ function assertActiveUser(userId) {
   return { ok: true, user: user };
 }
 
+function assertUserSession(userId, token) {
+  const auth = assertActiveUser(userId);
+  if (!auth.ok) return auth;
+  if (!validateUserSession(auth.user.userId, token)) {
+    return { ok: false, message: 'Invalid user session' };
+  }
+  return auth;
+}
+
 function handleLogin(body) {
   const loginId = normalizeLoginId(body.loginId);
   const password = String(body.password || '');
@@ -2901,6 +2938,7 @@ function handleLogin(body) {
   const computed = sha256Hex(password + user.salt);
   if (computed !== user.passwordHash) return { ok: false, message: 'Invalid credentials' };
 
+  const sessionToken = createUserSession(user.userId);
   const adminSessionToken = user.role === 'ADMIN' ? createAdminSession(user.userId) : '';
   return {
     ok: true,
@@ -2910,6 +2948,7 @@ function handleLogin(body) {
         name: user.name,
         email: user.email || '',
         role: user.role,
+        sessionToken: sessionToken,
         adminSessionToken: adminSessionToken
       }
     }
@@ -3559,6 +3598,8 @@ function handlePush(body) {
   const userId = String(body.userId || '').trim();
   const payload = body.payload || {};
   if (!userId) return { ok: false, message: 'userId required' };
+  const auth = assertUserSession(userId, body.sessionToken);
+  if (!auth.ok) return auth;
   const incomingSummary = summarizeSnapshotPayload(payload);
   const hasExistingData = listSnapshotsForUser(userId).some(function (row) {
     return !row.invalid && Number(row.totalItems || 0) > 0;
@@ -3694,6 +3735,8 @@ function findSnapshotPayload(userId, snapshotId) {
 function handleListSnapshots(body) {
   const userId = String(body.userId || '').trim();
   if (!userId) return { ok: false, message: 'userId required' };
+  const auth = assertUserSession(userId, body.sessionToken);
+  if (!auth.ok) return auth;
   const limit = Math.max(1, Math.min(100, Number(body.limit || 30)));
   const rows = listSnapshotsForUser(userId).slice(0, limit);
   return { ok: true, data: { rows: rows } };
@@ -3703,8 +3746,14 @@ function handleRestoreSnapshot(body) {
   const userId = String(body.userId || '').trim();
   const snapshotId = String(body.snapshotId || '').trim();
   if (!userId || !snapshotId) return { ok: false, message: 'userId and snapshotId required' };
+  const auth = assertUserSession(userId, body.sessionToken);
+  if (!auth.ok) return auth;
   const payload = findSnapshotPayload(userId, snapshotId);
   if (!payload) return { ok: false, message: 'Snapshot not found' };
+  const summary = summarizeSnapshotPayload(payload);
+  if (summary.totalItems === 0) {
+    return { ok: false, message: 'Empty snapshots cannot be restored.' };
+  }
   const restored = Object.assign({}, payload, { updatedAt: nowIso() });
   const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
   sheet.appendRow([nowIso(), userId, JSON.stringify(restored)]);
@@ -3721,7 +3770,10 @@ function handleRestoreSnapshot(body) {
 
 function handlePull(e) {
   const userId = String(e.parameter.userId || '').trim();
+  const sessionToken = String(e.parameter.sessionToken || '').trim();
   if (!userId) return { ok: false, message: 'userId required' };
+  const auth = assertUserSession(userId, sessionToken);
+  if (!auth.ok) return auth;
 
   const sheet = getSheet(SNAPSHOTS_SHEET, ['timestamp', 'userId', 'payloadJson']);
   const values = sheet.getDataRange().getValues();

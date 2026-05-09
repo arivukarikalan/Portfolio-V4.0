@@ -8,7 +8,7 @@ import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
 import { getSyncState } from '../storage/sync';
 import type { TradeRecord } from '../core/types';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow, syncNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import { formatDateTime, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
@@ -569,7 +569,7 @@ export function renderDashboardView(root: HTMLElement): void {
 
     const updateSystemStatus = async () => {
       if (!statusCloud || !statusPending || !statusLastPush || !statusLastPull || !statusLastPrice) return;
-      const state = await getSyncState();
+      const state = await getSyncState(session.userId);
       statusCloud.textContent = navigator.onLine ? 'Online' : 'Offline';
       statusPending.textContent = state.pendingChangeCount ? `${state.pendingChangeCount} changes` : 'No pending';
       statusLastPush.textContent = formatStatusDate(state.lastSyncedAt);
@@ -1020,6 +1020,7 @@ export function renderDashboardView(root: HTMLElement): void {
       setBusy(refreshButton, true, label);
       try {
         await syncNow(session);
+        await refreshLivePricesNow(session);
         await refreshDashboard();
         if (feedback) showAlert(feedback, 'success', 'Dashboard refreshed.');
         if (refreshButton) {

@@ -25,7 +25,7 @@ import {
   type NseRow,
   type TickerRequest
 } from '../services/tickers';
-import { initCloudSync, queueSnapshot, syncNow } from '../services/cloudSync';
+import { initCloudSync, queueSnapshot, refreshLivePricesNow } from '../services/cloudSync';
 import { listLivePrices } from '../storage/prices';
 import { fetchPriceHistory, type PriceHistoryPoint } from '../services/priceHistory';
 import { addRecoveryPlan, deleteRecoveryPlan, listRecoveryPlans, updateRecoveryPlan } from '../storage/recoveryPlans';
@@ -5384,9 +5384,15 @@ export function renderTradesView(root: HTMLElement): void {
       const label = priceRefresh.textContent || 'Refresh Prices';
       setBusy(priceRefresh, true, label);
       try {
-        await syncNow(session);
+        const summary = await refreshLivePricesNow(session);
         await refreshTickerPanels();
-        showAlert(feedback, 'success', 'Live prices refreshed.');
+        showAlert(
+          feedback,
+          summary.success > 0 ? 'success' : 'warning',
+          summary.requested
+            ? `Live prices refreshed (${summary.success}/${summary.requested} updated).`
+            : 'No tickers found to refresh.'
+        );
       } catch (error) {
         showAlert(feedback, 'danger', toErrorMessage(error));
       } finally {

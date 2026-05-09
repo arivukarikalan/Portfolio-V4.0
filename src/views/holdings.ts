@@ -7,7 +7,7 @@ import { listTrades } from '../storage/trades';
 import { listLivePrices } from '../storage/prices';
 import { getUserSettings } from '../storage/settings';
 import type { TradeRecord } from '../core/types';
-import { initCloudSync, syncNow } from '../services/cloudSync';
+import { initCloudSync, refreshLivePricesNow } from '../services/cloudSync';
 import { requireSession } from './guards';
 import { formatDateTime, formatMoney, formatPct } from '../utils/format';
 import { normalizeSymbol } from '../utils/symbols';
@@ -628,10 +628,14 @@ export function renderHoldingsView(root: HTMLElement): void {
       const label = refreshBtn.textContent || 'Refresh Prices';
       setBusy(refreshBtn, true, label);
       try {
-        await syncNow(session);
+        const summary = await refreshLivePricesNow(session);
         await refreshHoldings();
         if (feedback) {
-          showAlert(feedback, 'success', 'Live prices refreshed.');
+          const tone = summary.success > 0 ? 'success' : 'warning';
+          const message = summary.requested
+            ? `Live prices refreshed (${summary.success}/${summary.requested} updated).`
+            : 'No tickers found to refresh.';
+          showAlert(feedback, tone, message);
         }
       } catch (error) {
         if (feedback) {
